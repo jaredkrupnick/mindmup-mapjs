@@ -1,4 +1,15 @@
 function test_tree() {
+	// return {
+	// 	title: "Hello",
+	// 	ideas: {
+	// 		1: {
+	// 			title: "world"
+	// 		},
+	// 		2: {
+	// 			title: "foo"
+	// 		}
+	// 	}
+	// }
 	return {
 		"title": "MindMup is the fastest way to create and share simple mind maps.",
 		"ideas": {

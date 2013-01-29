@@ -148,30 +148,30 @@ MAPJS.KineticMediator = function (mapModel, stage) {
 			duration: 0.1
 		});
 	});
-	(function () {
-		var keyboardEventHandlers = {
-			13: mapModel.addSiblingIdea.bind(mapModel, 'keyboard'),
-			8: mapModel.removeSubIdea.bind(mapModel, 'keyboard'),
-			9: mapModel.addSubIdea.bind(mapModel, 'keyboard'),
-			37: mapModel.selectNodeLeft.bind(mapModel, 'keyboard'),
-			38: mapModel.selectNodeUp.bind(mapModel, 'keyboard'),
-			39: mapModel.selectNodeRight.bind(mapModel, 'keyboard'),
-			40: mapModel.selectNodeDown.bind(mapModel, 'keyboard'),
-			46: mapModel.removeSubIdea.bind(mapModel, 'keyboard'),
-			32: mapModel.editNode.bind(mapModel, 'keyboard')
-		},
-			onKeydown = function (evt) {
-				var eventHandler = keyboardEventHandlers[evt.which];
-				if (eventHandler) {
-					eventHandler();
-					evt.preventDefault();
-				}
-			};
-		jQuery(document).keydown(onKeydown);
-		mapModel.addEventListener('inputEnabledChanged', function (isInputEnabled) {
-			jQuery(document)[isInputEnabled ? 'bind' : 'unbind']('keydown', onKeydown);
-		});
-	}());
+	// (function () {
+	// 	var keyboardEventHandlers = {
+	// 		13: mapModel.addSiblingIdea.bind(mapModel, 'keyboard'),
+	// 		8: mapModel.removeSubIdea.bind(mapModel, 'keyboard'),
+	// 		9: mapModel.addSubIdea.bind(mapModel, 'keyboard'),
+	// 		37: mapModel.selectNodeLeft.bind(mapModel, 'keyboard'),
+	// 		38: mapModel.selectNodeUp.bind(mapModel, 'keyboard'),
+	// 		39: mapModel.selectNodeRight.bind(mapModel, 'keyboard'),
+	// 		40: mapModel.selectNodeDown.bind(mapModel, 'keyboard'),
+	// 		46: mapModel.removeSubIdea.bind(mapModel, 'keyboard'),
+	// 		32: mapModel.editNode.bind(mapModel, 'keyboard')
+	// 	},
+	// 		onKeydown = function (evt) {
+	// 			var eventHandler = keyboardEventHandlers[evt.which];
+	// 			if (eventHandler) {
+	// 				eventHandler();
+	// 				evt.preventDefault();
+	// 			}
+	// 		};
+	// 	jQuery(document).keydown(onKeydown);
+	// 	mapModel.addEventListener('inputEnabledChanged', function (isInputEnabled) {
+	// 		jQuery(document)[isInputEnabled ? 'bind' : 'unbind']('keydown', onKeydown);
+	// 	});
+	// }());
 };
 MAPJS.KineticMediator.dimensionProvider = function (title) {
 	'use strict';
