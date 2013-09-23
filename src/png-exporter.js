@@ -1,6 +1,6 @@
 /*jslint nomen: true*/
 /*global _, jQuery, MAPJS, Kinetic */
-MAPJS.pngExport = function (idea) {
+MAPJS.pngExport = function (idea, viewPort) {
 	'use strict';
 	var deferred = jQuery.Deferred(),
 		layout = MAPJS.calculateLayout(idea, MAPJS.KineticMediator.dimensionProvider),
@@ -58,6 +58,11 @@ MAPJS.pngExport = function (idea) {
 		link.moveToBottom();
 		link.setMMAttr(l.attr);
 	});
+	if (viewPort) {
+		var rectProps = _.extend({}, viewPort, {stroke: '#555555', strokeWidth: 10, fill: '#2cefff', opacity: 0.2}),
+			rect = new Kinetic.Rect(rectProps);
+		layer.add(rect);
+	}
 	hiddenstage.draw();
 	hiddenstage.toDataURL({
 		callback: function (url) {
