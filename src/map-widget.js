@@ -1,13 +1,13 @@
-/*global _, jQuery, Kinetic, MAPJS, window, document, $*/
-jQuery.fn.mapWidget = function (activityLog, mapModel, touchEnabled, imageRendering) {
+/*global _, jQuery, Kinetic, MAPJS, window, document, $, MutationObserver*/
+jQuery.fn.mapWidget = function (activityLog, mapModel, touchEnabled, imageInsertController) {
 	'use strict';
 	return this.each(function () {
 		var element = jQuery(this),
 			stage = new Kinetic.Stage({
-				container: 'container',
+				container: this.id,
 				draggable: true
 			}),
-			mediator = new MAPJS.KineticMediator(mapModel, stage, imageRendering),
+			mediator = new MAPJS.KineticMediator(mapModel, stage),
 			setStageDimensions = function () {
 				stage.setWidth(element.width());
 				stage.setHeight(element.height());
@@ -22,14 +22,19 @@ jQuery.fn.mapWidget = function (activityLog, mapModel, touchEnabled, imageRender
 			},
 			hotkeyEventHandlers = {
 				'return': 'addSiblingIdea',
+				'shift+return': 'addSiblingIdeaBefore',
 				'del backspace': 'removeSubIdea',
 				'tab insert': 'addSubIdea',
 				'left': 'selectNodeLeft',
 				'up': 'selectNodeUp',
 				'right': 'selectNodeRight',
+				'shift+right': 'activateNodeRight',
+				'shift+left': 'activateNodeLeft',
+				'shift+up': 'activateNodeUp',
+				'shift+down': 'activateNodeDown',
 				'down': 'selectNodeDown',
 				'space f2': 'editNode',
-				'shift+up': 'toggleCollapse',
+				'f': 'toggleCollapse',
 				'c meta+x ctrl+x': 'cut',
 				'p meta+v ctrl+v': 'paste',
 				'y meta+c ctrl+c': 'copy',
@@ -77,7 +82,7 @@ jQuery.fn.mapWidget = function (activityLog, mapModel, touchEnabled, imageRender
 				}
 			});
 		});
-		MAPJS.dragdrop(mapModel, stage);
+		MAPJS.dragdrop(mapModel, stage, imageInsertController);
 		$(document).on('keypress', function (evt) {
 			if (!actOnKeys) {
 				return;
@@ -103,8 +108,16 @@ jQuery.fn.mapWidget = function (activityLog, mapModel, touchEnabled, imageRender
 		setStageDimensions();
 		stage.setX(0.5 * stage.getWidth());
 		stage.setY(0.5 * stage.getHeight());
+
+		new MutationObserver(function (mutations) {
+			setStageDimensions();
+			stage.setX(0.5 * stage.getWidth());
+			stage.setY(0.5 * stage.getHeight());
+			stage.draw();
+		}).observe(element[0], {attributes: true});
+
 		jQuery(window).bind('orientationchange resize', setStageDimensions);
-		$(document).on('contextmenu', function (e) { e.preventDefault(); e.stopPropagation(); return false; });
+		element.on('contextmenu', function (e) { e.preventDefault(); e.stopPropagation(); return false; });
 		element.on('mousedown touch', function (e) {
 			window.focus();
 			if (document.activeElement !== e.target) {

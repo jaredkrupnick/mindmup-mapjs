@@ -46,7 +46,41 @@
 			.active {
 				background-color: green;
 				color: white;
-			}
+      }
+      svg {
+        position: absolute;
+        margin: 0px;
+        padding: 0px;
+        z-index: 1;
+      }
+      .node {
+        position: absolute;
+        margin: 0px;
+        padding: 0px;
+        border-radius: 10px;
+        border: 1px solid #888;
+        box-shadow: 5px 5px 5px rgba(204, 204, 204, 0.4);
+        z-index: 2;
+      }
+	  .node.dragging, .connector.dragging {
+		  opacity: 0.4
+	  }
+      .node.selected, .node:focus {
+        outline: 0;
+        border: 3px dashed #2E9AFE;
+        margin: -2px;
+        box-shadow: 5px 5px 5px black;
+      }
+      .node .text {
+        padding: 0;
+        white-space: pre;
+		font-family: "Helvetica";
+		font-weight: bold;
+		font-size: 12;
+		text-align: center;
+        line-height: '150%';
+        margin:2px;
+      }
 		</style>
 
 		<input type="button" class="resetView" value="0"></input>
@@ -85,6 +119,7 @@
 		<div id="container"></div>
 		<script type="text/javascript" src="../lib/jquery-2.0.2.min.js"></script>
 		<script type="text/javascript" src="../lib/jquery.mousewheel-3.1.3.js"></script>
+		<script src="../lib/jquery-ui-1.10.0.custom.min.js"></script>
 		<script src="../lib/jquery.hotkeys.js"></script>
 		<script src="../lib/jquery.hammer.min.js"></script>
 		<script type="text/javascript" src="../lib/underscore-1.4.4.js"></script>
@@ -108,6 +143,7 @@
 		<script type="text/javascript" src="../src/map-widget.js"></script>
 		<script type="text/javascript" src="../src/link-edit-widget.js"></script>
 		<script type="text/javascript" src="../src/image-drop-widget.js"></script>
+		<script type="text/javascript" src="../src/dom-map-widget.js"></script>
 		<script type="text/javascript" src="testtree.js"></script>
 		<script>
 			jQuery.fn.attachmentEditorWidget = function (mapModel) {
@@ -129,10 +165,10 @@
 				window.onerror = alert;
 				var container = jQuery('#container'),
 				idea = MAPJS.content(test_tree()),
-				isTouch = false,
 				imageInsertController = new MAPJS.ImageInsertController("http://localhost:4999?u="),
 				mapModel = new MAPJS.MapModel(MAPJS.KineticMediator.layoutCalculator, []);
-				container.mapWidget(console,mapModel, isTouch, imageInsertController);
+				//container.mapWidget(console,mapModel, isTouch, imageInsertController);
+        container.domMapWidget(console, mapModel);
 				jQuery('body').mapToolbarWidget(mapModel);
 				jQuery('body').attachmentEditorWidget(mapModel);
 				$("[data-mm-action='export-image']").click(function () {

@@ -1,4 +1,4 @@
-/*global _, Kinetic, MAPJS*/
+/*global _, Kinetic, MAPJS */
 if (Kinetic.Stage.prototype.isRectVisible) {
 	throw ('isRectVisible already exists, should not mix in our methods');
 }
@@ -59,7 +59,6 @@ Kinetic.Stage.prototype.isRectVisible = function (rect, offset) {
 
 MAPJS.KineticMediator = function (mapModel, stage) {
 	'use strict';
-	window.stage = stage;
 	var layer = new Kinetic.Layer(),
 		nodeByIdeaId = {},
 		connectorByFromIdeaIdToIdeaId = {},
@@ -168,7 +167,7 @@ MAPJS.KineticMediator = function (mapModel, stage) {
 			mapModel.editNode('mouse', false, false);
 		});
 		node.on(':textChanged', function (event) {
-			mapModel.updateTitle(n.id, event.text);
+			mapModel.updateTitle(n.id, event.text, event.isNew);
 			mapModel.setInputEnabled(true);
 		});
 		node.on(':editing', function () {
@@ -177,7 +176,10 @@ MAPJS.KineticMediator = function (mapModel, stage) {
 		node.on(':request', function (event) {
 			mapModel[event.type](event.source, n.id);
 		});
-		if (n.level > 1) {
+		if (!mapModel.isEditingEnabled()) {
+			node.setDraggable(false);
+		}
+		if (n.level > 1 && mapModel.isEditingEnabled()) {
 			node.on('mouseover touchstart', stage.setDraggable.bind(stage, false));
 			node.on('mouseout touchend', stage.setDraggable.bind(stage, true));
 		}
@@ -197,6 +199,14 @@ MAPJS.KineticMediator = function (mapModel, stage) {
 			return;
 		}
 		ensureSelectedNodeVisible(node);
+	});
+	mapModel.addEventListener('nodeFocusRequested', function (ideaId)  {
+		var node = nodeByIdeaId[ideaId];
+		stage.setScale(1);
+		stage.setX((stage.getWidth() / 2) - (0.5 * node.getWidth()) - node.getX());
+		stage.setY((stage.getHeight() / 2) - (0.5 * node.getHeight()) - node.getY());
+		stage.draw();
+		stage.fire(':scaleChangeComplete');
 	});
 	mapModel.addEventListener('nodeAttrChanged', function (n) {
 		var node = nodeByIdeaId[n.id];
