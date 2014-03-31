@@ -1,13 +1,117 @@
 /*global MAPJS, Color, $, _*/
 /*jslint nomen: true, newcap: true, browser: true*/
-
+$.fn.draggableContainer = function () {
+	'use strict';
+	var currentDragObject,
+		dragPosition,
+		originalDragObjectPosition,
+		capturePosition = function (event) {
+			dragPosition = {
+				x: event.pageX,
+				y: event.pageY
+			};
+		},
+		drag = function (event) {
+			var deltaX = (event.pageX - dragPosition.x) || 0,
+				deltaY = (event.pageY - dragPosition.y) || 0,
+				oldpos = {
+					top: parseInt(currentDragObject.css('top')),
+					left: parseInt(currentDragObject.css('left'))
+				},
+				newpos = {
+					top: oldpos.top + deltaY,
+					left: oldpos.left + deltaX
+				};
+			currentDragObject.css(newpos).trigger('mm:drag');
+			capturePosition(event);
+			event.preventDefault();
+		},
+		rollback = function () {
+			var target = currentDragObject; // allow it to be cleared while animating
+			target.animate(originalDragObjectPosition, {
+				complete: function () {
+					target.trigger('mm:cancel-dragging');
+				},
+				progress: function () {
+					target.trigger('mm:drag');
+				}
+			});
+		};
+	$(this).on('mm:start-dragging', function (event) {
+		if (!currentDragObject) {
+			currentDragObject = $(event.relatedTarget);
+			originalDragObjectPosition = {
+				top: currentDragObject.css('top'),
+				left: currentDragObject.css('left')
+			};
+			capturePosition(event);
+			$(this).on('mousemove', drag);
+		}
+	}).on('mouseup', function () {
+		var evt = $.Event('mm:stop-dragging');
+		if (currentDragObject) {
+			currentDragObject.trigger(evt);
+			if (evt.result === false) {
+				rollback();
+			}
+			currentDragObject = dragPosition = undefined;
+			$(this).off('mousemove', drag);
+		}
+	}).on('mouseleave', function () {
+		if (currentDragObject) {
+			rollback();
+			currentDragObject = dragPosition = undefined;
+			$(this).off('mousemove', drag);
+		}
+	}).attr('data-drag-role', 'container');
+	return this;
+};
+$.fn.draggable = function () {
+	'use strict';
+	$(this).mousedown(function (event) {
+		$(this).trigger(
+			$.Event('mm:start-dragging', {
+				relatedTarget: this,
+				pageX: event.pageX,
+				pageY: event.pageY
+			})
+		);
+	});
+	return this;
+};
 $.fn.positionNode = function (stageElement) {
 	'use strict';
 	return $(this).each(function () {
-		var node = $(this);
+		var node = $(this),
+			xpos = node.data('x') + stageElement.data('stage-x'),
+			ypos = node.data('y') + stageElement.data('stage-y'),
+			growx = 0, growy = 0, minGrow = 100,
+		    move = function () {
+				var element = $(this),
+					oldpos = {
+						top: parseInt(element.css('top')),
+						left: parseInt(element.css('left'))
+					},
+					newpos = {
+						top: oldpos.top + growy,
+						left: oldpos.left + growx
+					};
+				element.css(newpos);
+			};
+		if (xpos < 0) {
+			growx = Math.max(-1 * xpos, minGrow);
+		}
+		if (ypos < 0) {
+			growy = Math.max(-1 * ypos, minGrow);
+		}
+		if (growx > 0 || growy > 0) {
+			stageElement.children().each(move);
+			stageElement.data('stage-x', stageElement.data('stage-x') + growx);
+			stageElement.data('stage-y', stageElement.data('stage-y') + growy);
+		}
 		node.css({
-			'left': node.data('x')  + stageElement.data('stage-x'),
-			'top': node.data('y') + stageElement.data('stage-y')
+			'left': xpos + growx,
+			'top': ypos + growy
 		});
 	});
 };
@@ -185,18 +289,15 @@ MAPJS.domMediator = function (mapModel, stageElement) {
 					'background-color': backgroundColor()
 				}).appendTo(stageElement).click(function (evt) {
 					mapModel.clickNode(node.id, evt);
-				}).draggable({
-					containment: 'parent',
-					start: function () {
-						connectorsFor(node.id).find('.connector').add(nodeDiv).addClass('dragging');
-					},
-					drag: function () {
-						updateNodeConnectors(node.id);
-					},
-					stop: function () {
-						connectorsFor(node.id).find('.connector').add(nodeDiv).removeClass('dragging');
-						updateNodeConnectors(node.id);
-					}
+				}).draggable()
+				.on('mm:start-dragging', function () {
+					connectorsFor(node.id).find('.connector').add(nodeDiv).addClass('dragging');
+				}).on('mm:stop-dragging mm:cancel-dragging', function () {
+					connectorsFor(node.id).find('.connector').add(nodeDiv).removeClass('dragging');
+					updateNodeConnectors(node.id);
+					return false;
+				}).on('mm:drag', function () {
+					updateNodeConnectors(node.id);
 				}),
 			textBox = $('<span>').addClass('text').text(node.title).appendTo(nodeDiv).css({
 					color: foregroundColor(backgroundColor()),
@@ -282,11 +383,10 @@ $.fn.domMapWidget = function (activityLog, mapModel, touchEnabled) {
 
 	return this.each(function () {
 		var element = $(this),
-			stage = $('<div>').css({width: '5000', height: '5000', position: 'relative'}).attr('data-mapjs-role', 'stage').appendTo(element);
-		stage.data('stage-x', 2500);
-		stage.data('stage-y', 2500);
-		element.scrollLeft(2500 + element.innerHeight() / 2);
-		element.scrollTop(2500 + element.innerWidth() / 2);
+			stage = $('<div>').css({width: '100%', height: '100%', position: 'relative'}).attr('data-mapjs-role', 'stage').appendTo(element);
+		element.draggableContainer();
+		stage.data('stage-x', element.innerWidth() / 2);
+		stage.data('stage-y', element.innerHeight() / 2);
 		MAPJS.domMediator(mapModel, stage);
 		_.each(hotkeyEventHandlers, function (mappedFunction, keysPressed) {
 			element.keydown(keysPressed, function (event) {
@@ -321,6 +421,8 @@ $.fn.domMapWidget = function (activityLog, mapModel, touchEnabled) {
 // + selected
 // + default and non default backgrounds for root and children
 // + multi-line text
+//
+// if adding a node to left/top coordinate beyond 0, expand the stage and move all nodes down, expand by a margin to avoid re-expanding all the time
 //
 // focus or selected?
 // drag * drop
