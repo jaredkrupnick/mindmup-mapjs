@@ -1,5 +1,57 @@
-/*global MAPJS, Color, $, _, Hammer*/
 /*jslint nomen: true, newcap: true, browser: true*/
+/*global MAPJS, $, Hammer, _, jQuery*/
+MAPJS.DOMRender = {
+	config: {
+		padding: 8,
+		textMaxWidth: 160,
+		textClass: 'mapjs-text'
+	},
+	dimensionProvider: function (idea) {
+		'use strict'; /* support multiple stages? */
+		var existing = document.getElementById('node_' + idea.id),
+			textBox,
+			result;
+		if (existing) {
+			textBox = $(existing);
+			if (textBox.find('span').text() === idea.title /* check for collapsed and icon size */) {
+				return _.pick(textBox.data(), 'width', 'height');
+			}
+		}
+		textBox = $('<div>').addClass('mapjs-node invisible').appendTo('body').updateNodeContent(idea);
+		result = {
+			width: textBox.outerWidth(true),
+			height: textBox.outerHeight(true)
+		};
+		textBox.detach();
+		MAPJS.nonexisting = MAPJS.nonexisting + 1;
+		return result;
+	},
+	layoutCalculator: function (contentAggregate) {
+		'use strict';
+		return MAPJS.calculateLayout(contentAggregate, MAPJS.DOMRender.dimensionProvider);
+	}
+};
+$.fn.queueFadeOut = function () {
+	'use strict';
+	var element = $(this);
+	return element.fadeOut({
+		duration: 400,
+		complete: function () {
+			element.remove();
+		},
+		'queue': 'nodeQueue'
+	});
+};
+$.fn.queueFadeIn = function () {
+	'use strict';
+	var element = $(this);
+	return element.css('opacity', 0)
+			.animate(
+				{'opacity': 1},
+				{ complete: function () { element.css('opacity', ''); }, duration: 400, 'queue': 'nodeQueue' }
+			);
+};
+
 $.fn.draggableContainer = function () {
 	'use strict';
 	var currentDragObject,
@@ -8,8 +60,8 @@ $.fn.draggableContainer = function () {
 		drag = function (event) {
 			if (currentDragObject && event.gesture) {
 				var newpos = {
-						top: parseInt(originalDragObjectPosition.top) + event.gesture.deltaY,
-						left: parseInt(originalDragObjectPosition.left) + event.gesture.deltaX
+						top: parseInt(originalDragObjectPosition.top, 10) + event.gesture.deltaY,
+						left: parseInt(originalDragObjectPosition.left, 10) + event.gesture.deltaX
 					};
 				currentDragObject.css(newpos).trigger('mm:drag');
 				event.preventDefault();
@@ -58,7 +110,7 @@ $.fn.draggableContainer = function () {
 };
 $.fn.draggable = function () {
 	'use strict';
-	return $(this).on('dragstart', function (event) {
+	return $(this).on('dragstart', function () {
 		$(this).trigger(
 			$.Event('mm:start-dragging', {
 				relatedTarget: this
@@ -66,263 +118,285 @@ $.fn.draggable = function () {
 		);
 	});
 };
-$.fn.positionNode = function (stageElement) {
-	'use strict';
-	return $(this).each(function () {
-		var node = $(this),
-			xpos = node.data('x') + stageElement.data('stage-x'),
-			ypos = node.data('y') + stageElement.data('stage-y'),
-			growx = 0, growy = 0, minGrow = 100,
-		    move = function () {
-				var element = $(this),
-					oldpos = {
-						top: parseInt(element.css('top')),
-						left: parseInt(element.css('left'))
-					},
-					newpos = {
-						top: oldpos.top + growy,
-						left: oldpos.left + growx
-					};
-				element.css(newpos);
-			};
-		if (xpos < 0) {
-			growx = Math.max(-1 * xpos, minGrow);
-		}
-		if (ypos < 0) {
-			growy = Math.max(-1 * ypos, minGrow);
-		}
-		if (growx > 0 || growy > 0) {
-			stageElement.children().each(move);
-			stageElement.data('stage-x', stageElement.data('stage-x') + growx);
-			stageElement.data('stage-y', stageElement.data('stage-y') + growy);
-		}
-		node.css({
-			'left': xpos + growx,
-			'top': ypos + growy
-		});
-	});
-};
+
 MAPJS.domMediator = function (mapModel, stageElement) {
 	'use strict';
+	var viewPort = stageElement.parent(),
+		animateCount = 0, moveCount = 0,
+		connectorsForAnimation = $(),
+		linksForAnimation = $();
 
-	var connectorKey = function (connectorObj) {
-			return 'connector_' + connectorObj.from + '_' + connectorObj.to;
+	var cleanDOMId = function (s) {
+			return s.replace(/\./g, '_');
 		},
-		svg = function (tag) {
-			return document.createElementNS('http://www.w3.org/2000/svg', tag);
+		connectorKey = function (connectorObj) {
+			return cleanDOMId('connector_' + connectorObj.from + '_' + connectorObj.to);
 		},
-		horizontalConnector = function (parentX, parentY, parentWidth, parentHeight,
-				childX, childY, childWidth, childHeight) {
-			var childHorizontalOffset = parentX < childX ? 0.1 : 0.9,
-				parentHorizontalOffset = 1 - childHorizontalOffset;
+		linkKey = function (linkObj) {
+			return cleanDOMId('link_' + linkObj.ideaIdFrom + '_' + linkObj.ideaIdTo);
+		},
+		nodeKey = function (id) {
+			return cleanDOMId('node_' + id);
+		},
+		stageToViewCoordinates = function (x, y) {
+			var stage = stageElement.data();
 			return {
-				from: {
-					x: parentX + parentHorizontalOffset * parentWidth,
-					y: parentY + 0.5 * parentHeight
-				},
-				to: {
-					x: childX + childHorizontalOffset * childWidth,
-					y: childY + 0.5 * childHeight
-				},
-				controlPointOffset: 0
+				x: stage.stageScale * (x + stage.stageX) - viewPort.scrollLeft(),
+				y: stage.stageScale * (y + stage.stageY) - viewPort.scrollTop()
 			};
 		},
-		calculateConnector = function (parent, child) {
-			return calculateConnectorInner(parent.position().left, parent.position().top, parent.width(), parent.height(),
-				child.position().left, child.position().top, child.width(), child.height());
+		updateScreenCoordinates = function () {
+			var element = $(this);
+			element.css({
+				'left': element.data('x') + stageElement.data('stageX'),
+				'top' : element.data('y') + stageElement.data('stageY')
+			}).trigger('mapjs:move');
 		},
-		calculateConnectorInner = _.memoize(function (parentX, parentY, parentWidth, parentHeight,
-				childX, childY, childWidth, childHeight) {
-			var tolerance = 10,
-				childMid = childY + childHeight * 0.5,
-				parentMid = parentY + parentHeight * 0.5,
-				childHorizontalOffset;
-			if (Math.abs(parentMid - childMid) + tolerance < Math.max(childHeight, parentHeight * 0.75)) {
-				return horizontalConnector(parentX, parentY, parentWidth, parentHeight, childX, childY, childWidth, childHeight);
-			}
-			childHorizontalOffset = parentX < childX ? 0 : 1;
-			return {
-				from: {
-					x: parentX + 0.5 * parentWidth,
-					y: parentY + 0.5 * parentHeight
+		animateToPositionCoordinates = function () {
+			var element = $(this);
+			element.clearQueue('nodeQueue').animate({
+				'left': element.data('x') + stageElement.data('stageX'),
+				'top' : element.data('y') + stageElement.data('stageY'),
+				'opacity': 1 /* previous animation can be cancelled with clearqueue, so ensure it gets visible */
+			}, {
+				duration: 400,
+				complete: function () {
+					element.each(updateScreenCoordinates).trigger('mapjs:move');
 				},
-				to: {
-					x: childX + childHorizontalOffset * childWidth,
-					y: childY + 0.5 * childHeight
-				},
-				controlPointOffset: 0.75
-			};
-		}, function () {
-			return Array.prototype.join.call(arguments, ',');
-		}),
-		updateDOMConnector = function (domElement) {
-			var config = {
-					stroke: '#888',
-					width: 1
-				},
-				element = $(domElement),
-				shapeFrom = $('#node_' + element.attr('data-connector-from')),
-				shapeTo = $('#node_' + element.attr('data-connector-to')),
-				calculatedConnector = calculateConnector(shapeFrom, shapeTo),
-				from = calculatedConnector.from,
-				to = calculatedConnector.to,
-				position = {
-					left: Math.min(shapeFrom.position().left, shapeTo.position().left),
-					top: Math.min(shapeFrom.position().top, shapeTo.position().top),
-				},
-				offset = calculatedConnector.controlPointOffset * (from.y - to.y),
-				maxOffset = Math.min(shapeTo.height(), shapeFrom.height()) * 1.5,
-				straightLine = false,
-				pathElement;
-			position.width = Math.max(shapeFrom.position().left + shapeFrom.width(), shapeTo.position().left + shapeTo.width(), position.left + 1) - position.left;
-			position.height = Math.max(shapeFrom.position().top + shapeFrom.height(), shapeTo.position().top + shapeTo.height(), position.top + 1) - position.top;
-			element.css(position);
-			if (straightLine) {
-				element.empty();
-				$(svg('line')).attr({
-					x1: from.x - position.left,
-					x2: to.x - position.left,
-					y1: from.y - position.top,
-					y2: to.y - position.top,
-					style: 'stroke:' + config.stroke + ';stroke-width:' + config.width + 'px'
-				}).appendTo(element);
-			} else {
-				offset = Math.max(-maxOffset, Math.min(maxOffset, offset));
-				pathElement = element.find('path');
-				if (pathElement.length === 0) {
-					element.empty();
-					pathElement = $(svg('path')).attr({
-						fill: 'none',
-						stroke: config.stroke,
-						'stroke-width': config.width,
-						'class': 'connector'
-					}).appendTo(element);
+				'queue': 'nodeQueue',
+				'easing': 'linear'
+			}).trigger('mapjs:animatemove');
+		},
+		growStage = function (growx, growy) {
+			stageElement.data('stageX', stageElement.data('stageX') + growx);
+			stageElement.data('stageY', stageElement.data('stageY') + growy);
+			stageElement.children('[data-mapjs-role=node]').each(updateScreenCoordinates);
+		},
+		ensureSpaceForNode = function () {
+			return $(this).each(function () {
+				var node = $(this),
+					xpos = node.data('x') + stageElement.data('stageX'),
+					ypos = node.data('y') + stageElement.data('stageY'),
+					growx = 0, growy = 0, minGrow = 100,
+					expandx = 0, expandy = 0,
+
+					rightBleed = xpos + node.outerWidth(true) - stageElement.width(),
+					bottomBleed = ypos + node.outerHeight(true) - stageElement.height();
+				if (xpos < 0) {
+					growx = Math.max(-1 * xpos, minGrow);
 				}
-				pathElement.attr('d',
-					'M' + (from.x - position.left) + ',' + (from.y - position.top) +
-					'Q' + (from.x - position.left) + ',' + (to.y - offset - position.top) + ' ' + (to.x - position.left) + ',' + (to.y - position.top)
-				);
+				if (ypos < 0) {
+					growy = Math.max(-1 * ypos, minGrow);
+				}
+				if (rightBleed > 0) {
+					expandx = Math.max(rightBleed, minGrow);
+				}
+				if (bottomBleed > 0) {
+					expandy = Math.max(bottomBleed, minGrow);
+				}
+				if (growx > 0 || growy > 0) {
+					growStage(growx, growy);
+				}
+				if (growx + rightBleed > 0) {
+					stageElement.css('min-width', stageElement.width() + growx + rightBleed);
+				}
+				if (growy + bottomBleed > 0) {
+					stageElement.css('min-height', stageElement.height() + growy + bottomBleed);
+				}
+			});
+		},
+		centerViewOn = function (x, y)/*in the stage coordinate system*/ {
+			var viewX = stageElement.data('stageX') + x,
+				viewY = stageElement.data('stageY') + y,
+				newLeftScroll = viewX - viewPort.innerWidth() / 2,
+				newTopScroll = viewY - viewPort.innerHeight() / 2,
+				growX = Math.max(-1 * newLeftScroll, 0),
+				growY = Math.max(-1 * newTopScroll, 0);
+			if (growX > 0 || growY > 0) {
+				growStage(growX, growY);
 			}
+			if (stageElement.width() - viewPort.innerWidth() < newLeftScroll - growX) {
+				stageElement.css('min-width', viewPort.innerWidth() + newLeftScroll - growX);
+			}
+			if (stageElement.height() - viewPort.innerHeight() < newTopScroll - growY) {
+				stageElement.css('min-height', viewPort.innerHeight() + newTopScroll - growY);
+			}
+			viewPort.animate({
+				scrollLeft: newLeftScroll - growX,
+				scrollTop: newTopScroll - growY
+			}, {
+				duration: 100,
+				easing: 'linear'
+			});
 		},
-		connectorsFor = function (nodeId) {
-			return $('[data-connector-from=' + nodeId + ']').add('[data-connector-to=' + nodeId + ']');
-		},
-		updateNodeConnectors = function (nodeId) {
-			_.each(connectorsFor(nodeId), updateDOMConnector);
+		ensureNodeVisible = function (domElement) {
+			var result = jQuery.Deferred(),
+				nodeTopLeft = stageToViewCoordinates(domElement.data('x'), domElement.data('y')),
+				nodeBottomRight = stageToViewCoordinates(domElement.data('x') + domElement.outerWidth(true), domElement.data('y') + domElement.outerHeight(true)),
+				animation = {},
+				margin = 10;
+			if (nodeTopLeft.x < 0) {
+				animation.scrollLeft = viewPort.scrollLeft() + nodeTopLeft.x - margin;
+			} else if (nodeBottomRight.x > viewPort.innerWidth()) {
+				animation.scrollLeft = viewPort.scrollLeft() + nodeBottomRight.x - viewPort.innerWidth() + margin;
+			}
+			if (nodeTopLeft.y < 0) {
+				animation.scrollTop = viewPort.scrollTop() + nodeTopLeft.y - margin;
+			} else if (nodeBottomRight.y > viewPort.innerHeight()) {
+				animation.scrollTop = viewPort.scrollTop() + nodeBottomRight.y - viewPort.innerHeight() + margin;
+			}
+			if (_.isEmpty(animation)) {
+				result.resolve();
+			} else {
+				viewPort.animate(animation, {queue: 'scrollQueue', duration: 100, easing: 'linear', complete: result.resolve});
+				viewPort.dequeue('scrollQueue');
+			}
+			return result;
 		};
-
 	mapModel.addEventListener('nodeSelectionChanged', function (ideaId, isSelected) {
-		var node = $('#node_' + ideaId);
+		var node = $('#' + nodeKey(ideaId));
 		if (isSelected) {
-			node.addClass('selected');
-			node.focus();
+			ensureNodeVisible(node).then(function () {
+				node.addClass('selected').focus();
+			});
 		} else {
 			node.removeClass('selected');
 		}
 	});
 	mapModel.addEventListener('nodeTitleChanged', function (node) {
-		$('#node_' + node.id).find('.text').text(node.title);
+		$('#' + nodeKey(node.id)).find('.text').text(node.title);
 	});
 	mapModel.addEventListener('nodeRemoved', function (node) {
-		$('#node_' + node.id).remove();
+		$('#' + nodeKey(node.id)).queueFadeOut();
 	});
-
-	mapModel.addEventListener('nodeMoved', function (node, reason) {
-
-		$('#node_' + node.id).data({
-			'x': node.x,
-			'y': node.y
-		}).positionNode(stageElement);
-		updateNodeConnectors(node.id);
-
-		//onFinish: ensureSelectedNodeVisible.bind(undefined, node)
+	mapModel.addEventListener('nodeMoved', function (node) {
+		var	nodeDom = $('#' + nodeKey(node.id)).data({
+				'x': node.x,
+				'y': node.y
+			}).each(ensureSpaceForNode),
+			screenTopLeft = stageToViewCoordinates(node.x, node.y),
+			screenBottomRight = stageToViewCoordinates(node.x + node.width, node.y + node.height);
+		if (screenBottomRight.x < 0 || screenBottomRight.y < 0 || screenTopLeft.x > viewPort.innerWidth() || screenTopLeft.y > viewPort.innerHeight()) {
+			moveCount++;
+			nodeDom.each(updateScreenCoordinates);
+		} else {
+			animateCount++;
+			nodeDom.each(animateToPositionCoordinates);
+		}
+	});
+	mapModel.addEventListener('nodeAttrChanged', function (n) {
+		$('#' + nodeKey(n.id)).updateNodeContent(n);
 	});
 	mapModel.addEventListener('connectorCreated', function (connector) {
-		var	domConnector = $(svg('svg'))
-			.attr({'id': connectorKey(connector), 'data-mapjs-role': 'connector', 'data-connector-from': connector.from, 'data-connector-to': connector.to})
-			.appendTo(stageElement);
-		updateDOMConnector(domConnector);
+		var element = MAPJS.createSVG()
+			.attr({'id': connectorKey(connector), 'data-mapjs-role': 'connector', 'class': 'mapjs-draw-container', 'data-mapjs-node-from': nodeKey(connector.from), 'data-mapjs-node-to': nodeKey(connector.to)})
+			.appendTo(stageElement).queueFadeIn().updateConnector();
+		$('#' + nodeKey(connector.from)).add($('#' + nodeKey(connector.to)))
+			.on('mapjs:move', function () { element.updateConnector(); })
+			.on('mapjs:animatemove', function () { connectorsForAnimation = connectorsForAnimation.add(element); });
 	});
 	mapModel.addEventListener('connectorRemoved', function (connector) {
-		$('#' + connectorKey(connector)).remove();
+		$('#' + connectorKey(connector)).queueFadeOut();
+	});
+	mapModel.addEventListener('linkCreated', function (l) {
+		var attr = _.extend({color: 'red', lineStyle: 'dashed'}, l.attr && l.attr.style),
+			link = MAPJS.createSVG()
+			.attr({
+				'id': linkKey(l),
+				'data-mapjs-role': 'link',
+				'class': 'mapjs-draw-container',
+				'data-mapjs-node-from': nodeKey(l.ideaIdFrom),
+				'data-mapjs-node-to': nodeKey(l.ideaIdTo)
+			})
+			.data(attr)
+			.appendTo(stageElement).queueFadeIn().updateLink();
+
+
+
+		$('#' + nodeKey(l.ideaIdFrom)).add($('#' + nodeKey(l.ideaIdTo)))
+			.on('mapjs:move', function () { link.updateLink(); })
+			.on('mapjs:animatemove', function () { linksForAnimation = linksForAnimation.add(link); });
+
+	});
+	mapModel.addEventListener('linkRemoved', function (l) {
+		$('#' + linkKey(l)).queueFadeOut();
+	});
+	mapModel.addEventListener('linkAttrChanged', function (l) {
+		var attr = _.extend({color: 'red', lineStyle: 'dashed'}, l.attr && l.attr.style);
+		$('#' + linkKey(l)).data(attr).updateLink();
 	});
 	mapModel.addEventListener('nodeCreated', function (node) {
-		var config = {
-				padding: '8px'
-			},
-			backgroundColor = function () {
-				var fromStyle =	node.attr && node.attr.style && node.attr.style.background,
-					generic = MAPJS.defaultStyles[node.level === 1 ? 'root' : 'nonRoot'].background;
-				return fromStyle ||  generic;
-			},
-			foregroundColor = function (backgroundColor) {
-				var tintedBackground = Color(backgroundColor).mix(Color('#EEEEEE')).hexString();
-				return MAPJS.contrastForeground(tintedBackground);
-			},
-			nodeDiv = $('<div>')
-				.attr('tabindex', 0)
-				.attr({
-					'id': 'node_' + node.id,
-					'data-mapjs-role': 'node'
-				}).data({
-					'x': node.x,
-					'y': node.y
-				})
-				.positionNode(stageElement)
-				.addClass('node')
-				.css({
-					'width': node.width,
-					'height': node.height,
-					'background-color': backgroundColor()
-				}).appendTo(stageElement).on('click tap', function (evt) {
-					mapModel.clickNode(node.id, evt);
-				}).draggable()
-				.on('mm:start-dragging', function () {
-					nodeDiv.addClass('dragging');
-				}).on('mm:stop-dragging mm:cancel-dragging', function () {
-					nodeDiv.removeClass('dragging');
-					updateNodeConnectors(node.id);
-					return false;
-				}).on('mm:drag', function () {
-					updateNodeConnectors(node.id);
-				}),
-			textBox = $('<span>').addClass('text').text(node.title).appendTo(nodeDiv).css({
-					color: foregroundColor(backgroundColor()),
-					display: 'block'
-				}),
-			icon;
-		if (node.attr && node.attr.icon) {
-			icon = document.createElement('img');
-			icon.src = node.attr.icon.url;
-			icon.width = node.attr.icon.width;
-			icon.height = node.attr.icon.height;
-
-			if (node.attr.icon.position === 'top') {
-				$(icon).css({
-					'display': 'block',
-					'margin-left': (node.width - icon.width) / 2,
-					'margin-top': config.padding
-				}).prependTo(nodeDiv);
-				textBox.css({
-					'display': 'block',
-					'width': '100%',
-					'margin-top': config.padding
-				});
-				nodeDiv.css('text-align', 'center');
-			} else {
-				nodeDiv.prepend(icon);
-			}
-		}
-		else {
-			textBox.css({
-				'margin-top': (node.height - textBox.outerHeight(true)) / 2,
-				'margin-left': (node.width - textBox.outerWidth(true)) / 2
-			});
-
-		}
+		var element = $('<div>')
+			.attr('tabindex', 0)
+			.attr({ 'id': nodeKey(node.id), 'data-mapjs-role': 'node' })
+			.data({ 'x': node.x, 'y': node.y, 'width': node.width, 'height': node.height})
+			.addClass('mapjs-node')
+			.appendTo(stageElement)
+			.queueFadeIn()
+			.updateNodeContent(node)
+			.on('tap', function (evt) { mapModel.clickNode(node.id, evt); })
+			.on('doubletap', function () {
+				if (!mapModel.getEditingEnabled()) {
+					mapModel.toggleCollapse('mouse');
+					return;
+				}
+				mapModel.editNode('mouse', false, false);
+			}).each(ensureSpaceForNode).each(updateScreenCoordinates);
+		element.css('min-width', element.css('width'));
 	});
+	mapModel.addEventListener('mapScaleChanged', function (scaleMultiplier /*, zoomPoint */) {
+		var currentScale = stageElement.data('stageScale'),
+			targetScale = Math.max(Math.min(currentScale * scaleMultiplier, 5), 0.2),
+			stageX = stageElement.data('stageX'),
+			stageY = stageElement.data('stageY');
+		if (currentScale === targetScale) {
+			return;
+		}
+		stageElement.data('stageScale', targetScale);
+		stageElement.css('transform', 'translate(-' + stageX + 'px, -' + stageY + 'px) scale(' + targetScale + ') translate(' + stageX + 'px, ' + stageY + 'px)');
+		viewPort.scrollLeft(stageX * (targetScale - currentScale) + viewPort.scrollLeft());
+		viewPort.scrollTop(stageY * (targetScale - currentScale) + viewPort.scrollTop());
+	});
+	mapModel.addEventListener('nodeFocusRequested', function (ideaId)  {
+		var node = $('#' + nodeKey(ideaId)),
+			nodeCenterX = node.data('x') + node.outerWidth(true) / 2,
+			nodeCenterY = node.data('y') + node.outerWidth(true) / 2;
+		stageElement.data('stageScale', 1).css('transform', '');
+		centerViewOn(nodeCenterX, nodeCenterY);
+	});
+	mapModel.addEventListener('mapViewResetRequested', function () {
+		var newLeftScroll = stageElement.data('stageX') - viewPort.innerWidth() / 2,
+			newTopScroll = stageElement.data('stageY') - viewPort.innerHeight() / 2;
+		stageElement.data('stageScale', 1);
+		stageElement.css('transform', '');
+		viewPort.scrollLeft(newLeftScroll);
+		viewPort.scrollTop(newTopScroll);
+	});
+	mapModel.addEventListener('layoutChangeComplete', function () {
+		var connectorGroupClone = $(), linkGroupClone = $();
+		connectorsForAnimation.each(function () {
+			if (!$(this).animateConnectorToPosition()) {
+				connectorGroupClone = connectorGroupClone.add(this);
+			}
+		});
+		linksForAnimation.each(function () {
+			if (!$(this).animateConnectorToPosition()) {
+				linkGroupClone = linkGroupClone.add(this);
+			}
+		});
+		connectorsForAnimation = $();
+		linksForAnimation = $();
+		stageElement.animate({'opacity': 1}, {
+			duration: 400,
+			queue: 'nodeQueue',
+			progress: function () { connectorGroupClone.updateConnector(); linkGroupClone.updateLink(); },
+		});
+		stageElement.children().andSelf().dequeue('nodeQueue');
+	});
+
+
 };
-$.fn.domMapWidget = function (activityLog, mapModel, touchEnabled) {
+$.fn.domMapWidget = function (activityLog, mapModel /*, touchEnabled */) {
 	'use strict';
 	var hotkeyEventHandlers = {
 			'return': 'addSiblingIdea',
@@ -370,10 +444,18 @@ $.fn.domMapWidget = function (activityLog, mapModel, touchEnabled) {
 
 	return this.each(function () {
 		var element = $(this),
-			stage = $('<div>').css({width: '100%', height: '100%', position: 'relative'}).attr('data-mapjs-role', 'stage').appendTo(element);
+			stage = $('<div>').css({
+				width: '100%',
+				height: '100%',
+				position: 'relative',
+				'min-width': element.innerWidth(),
+				'min-height': element.innerHeight()
+			}).attr('data-mapjs-role', 'stage').appendTo(element).data({
+				'stageX': element.innerWidth() / 2,
+				'stageY': element.innerHeight() / 2,
+				'stageScale': 1
+			});
 		element.draggableContainer();
-		stage.data('stage-x', element.innerWidth() / 2);
-		stage.data('stage-y', element.innerHeight() / 2);
 		MAPJS.domMediator(mapModel, stage);
 		_.each(hotkeyEventHandlers, function (mappedFunction, keysPressed) {
 			element.keydown(keysPressed, function (event) {
@@ -404,50 +486,80 @@ $.fn.domMapWidget = function (activityLog, mapModel, touchEnabled) {
 	});
 };
 
+
+// + connectors and links should hide if either of the nodes isn't present any more... and not die
+// + connectors and links should just return on update if they would repaint the same thing - check for parent positions
+//
 // + shadows
 // + selected
 // + default and non default backgrounds for root and children
 // + multi-line text
+// + if adding a node to left/top coordinate beyond 0, expand the stage and move all nodes down, expand by a margin to avoid re-expanding all the time
+// + images in background or as separate elements?
+// + icon position
+// + focus or selected?
+// + folded
+// + dblclick-tap to collapse/uncollapse
+// + hyperlinks
+// + custom connectors
+// + links and connectors to observe move and drag on nodes and repaint themselves
+// + custom connector specs
+// + stage resizing (esp node max width)
+// + zoom
+// + animations
 //
-// if adding a node to left/top coordinate beyond 0, expand the stage and move all nodes down, expand by a margin to avoid re-expanding all the time
+// --------- read only ------------
+// scroll/swipe
+// attachment - clip - hook into displaying the attach
+// drag background to move things
+// drag root node to move things
+// prevent scrolling so the screen is blank
+// perf test large maps
+
 //
-// focus or selected?
-// drag * drop
+// --------- editing --------------
+// - don't set contentEditable
+// - enable drag & drop
+// drop
+// editing as span or as textarea - grow automatically
 // drag background
-// icon position
-// custom connectors
-// attachment - clip
 // straight lines extension
 // collaboration avatars
-// folded
 // activated
-// zoom
 // mouse events
 // mapwidget keyboard bindings
 // mapwidget mouse bindings
-// hyperlinks
+// html export
+
+
+// collaboration - collaborator images
+
 // remaining kinetic mediator events
-// -	mapModel.addEventListener('addLinkModeToggled', function (isOn) {
-// -	mapModel.addEventListener('nodeEditRequested', function (nodeId, shouldSelectAll, editingNew) {
+//
+// viewing
 // +	mapModel.addEventListener('nodeCreated', function (n) {
-// -	mapModel.addEventListener('nodeSelectionChanged', function (ideaId, isSelected) {
-// -	mapModel.addEventListener('nodeFocusRequested', function (ideaId)  {
-// -	mapModel.addEventListener('nodeAttrChanged', function (n) {
-// -	mapModel.addEventListener('nodeDroppableChanged', function (ideaId, isDroppable) {
-// +	mapModel.addEventListener('nodeRemoved', function (n) {
-// +	mapModel.addEventListener('nodeMoved', function (n, reason) {
-// +	mapModel.addEventListener('nodeTitleChanged', function (n) {
-// +	mapModel.addEventListener('connectorCreated', function (n) {
-// -	mapModel.addEventListener('layoutChangeComplete', function () {
 // +	mapModel.addEventListener('connectorRemoved', function (n) {
-// -	mapModel.addEventListener('linkCreated', function (l) {
-// -	mapModel.addEventListener('linkRemoved', function (l) {
-// -	mapModel.addEventListener('linkAttrChanged', function (l) {
-// -	mapModel.addEventListener('mapScaleChanged', function (scaleMultiplier, zoomPoint) {
+// +	mapModel.addEventListener('linkCreated', function (l) {
+// +	mapModel.addEventListener('linkRemoved', function (l) {
+// +	mapModel.addEventListener('linkAttrChanged', function (l) {
+// +	mapModel.addEventListener('nodeMoved', function (n, reason) {
+// +	mapModel.addEventListener('nodeRemoved', function (n) {
+// +	mapModel.addEventListener('connectorCreated', function (n) {
+//		- ensure selected node is visible!
+// +	mapModel.addEventListener('nodeFocusRequested', function (ideaId)  {
+//		- center!
+// +	mapModel.addEventListener('layoutChangeComplete', function () {
+// +	mapModel.addEventListener('mapScaleChanged', function (scaleMultiplier, zoomPoint) {
 // -	mapModel.addEventListener('mapViewResetRequested', function () {
 // -	mapModel.addEventListener('mapMoveRequested', function (deltaX, deltaY) {
+// editing
+// -	mapModel.addEventListener('addLinkModeToggled', function (isOn) {
+// -	mapModel.addEventListener('nodeEditRequested', function (nodeId, shouldSelectAll, editingNew) {
+// +	mapModel.addEventListener('nodeAttrChanged', function (n) {
+// -	mapModel.addEventListener('nodeDroppableChanged', function (ideaId, isDroppable) {
+// +	mapModel.addEventListener('nodeTitleChanged', function (n) {
 // -	mapModel.addEventListener('activatedNodesChanged', function (activatedNodes, deactivatedNodes) {
-// animations
+
 // - node removed
 // - node moved (esp reason = failed)
 // no more memoization on calc connector - not needed
