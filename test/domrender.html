@@ -7,15 +7,11 @@
 		<style>
 			#container {
 				background-color: #FFFFFF;
-				overflow: auto;
+
 				height: 100%;
 				width: 100%;
 				border: 1px dashed black;
 			}
-	  
-	  .invisible {
-		  position: absolute; visibility:hidden;
-	  }
 		</style>
 
 		<input type="button" class="resetView" value="0"></input>
@@ -72,10 +68,10 @@
 		<script type="text/javascript" src="../src/drag-and-drop.js"></script>
 		<script type="text/javascript" src="../src/kinetic-mediator.js"></script>
 		<script type="text/javascript" src="../src/map-toolbar-widget.js"></script>
-		<script type="text/javascript" src="../src/png-exporter.js"></script>
 		<script type="text/javascript" src="../src/map-widget.js"></script>
 		<script type="text/javascript" src="../src/link-edit-widget.js"></script>
 		<script type="text/javascript" src="../src/image-drop-widget.js"></script>
+		<script type="text/javascript" src="../src/hammer-draggable.js"></script>
 		<script type="text/javascript" src="../src/dom-map-view.js"></script>
 		<script type="text/javascript" src="../src/dom-map-widget.js"></script>
 		<script type="text/javascript" src="roy-map.js"></script>
@@ -101,8 +97,8 @@
 				idea = MAPJS.content(test_tree()),
 				imageInsertController = new MAPJS.ImageInsertController("http://localhost:4999?u="),
 				mapModel = new MAPJS.MapModel(MAPJS.DOMRender.layoutCalculator, []);
-	//	mapModel.setEditingEnabled(false);
-        container.domMapWidget(console, mapModel);
+			//	mapModel.setEditingEnabled(false);
+				container.domMapWidget(console, mapModel);
 				jQuery('body').mapToolbarWidget(mapModel);
 				jQuery('body').attachmentEditorWidget(mapModel);
 				$("[data-mm-action='export-image']").click(function () {
