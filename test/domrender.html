@@ -33,7 +33,8 @@
 		<input type="button" class="openAttachment" value="open attachment"></input>
 		<input type="button" class="toggleAddLinkMode" value="add link"></input>
     <input type="button" onclick="showsvg()" value ="show svg"></input>
-    <input type="button" onclick="hidesvg()" value ="hide svg"></input>
+    <input type="button" onclick="showcanvas()" value ="show canvas"></input>
+    <input type="button" onclick="showstage()" value ="show stage"></input>
 		Background: <input type="text" class='updateStyle' data-mm-target-property='background'></input>
     Frames: <span id="framerate"></span>
     Cycle: <span id="cyclerate"></span>
@@ -100,7 +101,7 @@
               y: source.data('offsetY')
             },
             result = MAPJS.createSVG().attr({'width': source.data('width'), 'height': source.data('height')}),
-            domContainer = jQuery(document.createElementNS('http://www.w3.org/1999/xhtml', 'div'));
+            domContainer = jQuery(document.createElementNS('http://www.w3.org/1999/xhtml', 'div')).attr('id','domcontainer');
           source.find('svg').each(function () {
             var objectToClone = $(this),
               clone = MAPJS.createSVG('g').appendTo(result);
@@ -115,14 +116,38 @@
           
           return result;
       };
+      window.toImg = function () {
+        var deferred = jQuery.Deferred(),
+            svg = $('[data-mapjs-role=stage]').toSVG(),
+            domUrl = window.URL || window.webkitURL || window,
+            svgtext = svg[0].outerHTML.replace(/<svg /,'<svg xmlns="http://www.w3.org/2000/svg" ').replace(' id="domcontainer"',' xmlns="http://www.w3.org/1999/xhtml"'),
+            blob = new Blob([svgtext], {type: 'image/svg+xml;charset=utf-8'}),
+            url = domUrl.createObjectURL(blob),
+            img = new Image();
+            img.onload = function () {
+              domUrl.revokeObjectURL(url);
+              deferred.resolve(img);
+            };
+            img.src = url;
+            window.open(url);
+            return deferred.promise();
+      }
+      window.showcanvas = function () {
+        toImg().then (function (img) {
+            $('#container').hide();
+            var canvas = $('<canvas>').attr({width: img.width, height: img.height, 'id': 'imgcontainer'}).appendTo('body').css('position','absolute').show(),
+              ctx = canvas[0].getContext('2d');
+            ctx.drawImage(img, 0, 0); 
+        });
+      }
       window.showsvg = function () {
 
         var svg = $('[data-mapjs-role=stage]').toSVG();
         $('#container').hide();
-        svg.attr('id', 'svgcontainer').css('position','absolute').appendTo('body').show();
+        svg.attr('id', 'imgcontainer').css('position','absolute').appendTo('body').show();
       };
-      window.hidesvg = function () {
-        $('#svgcontainer').remove();
+      window.showstage = function () {
+        $('#imgcontainer').remove();
         $('#container').show();
       };
 			(function () {
