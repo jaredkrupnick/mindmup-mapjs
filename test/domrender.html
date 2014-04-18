@@ -32,6 +32,8 @@
 		<input type="button" class="paste" value="paste"></input>
 		<input type="button" class="openAttachment" value="open attachment"></input>
 		<input type="button" class="toggleAddLinkMode" value="add link"></input>
+    <input type="button" onclick="showsvg()" value ="show svg"></input>
+    <input type="button" onclick="hidesvg()" value ="hide svg"></input>
 		Background: <input type="text" class='updateStyle' data-mm-target-property='background'></input>
     Frames: <span id="framerate"></span>
     Cycle: <span id="cyclerate"></span>
@@ -90,7 +92,39 @@
 						);
 					});
 				});
-			};
+      };
+      $.fn.toSVG = function () {
+        var source = this,
+            offset = {
+              x: source.data('offsetX'),
+              y: source.data('offsetY')
+            },
+            result = MAPJS.createSVG().attr({'width': source.data('width'), 'height': source.data('height')}),
+            domContainer = jQuery(document.createElementNS('http://www.w3.org/1999/xhtml', 'div'));
+          source.find('svg').each(function () {
+            var objectToClone = $(this),
+              clone = MAPJS.createSVG('g').appendTo(result);
+            clone.attr('transform', 'translate(' + (offset.x + objectToClone.position().left)+',' + (offset.y + objectToClone.position().top) +')');
+            objectToClone.children().clone().appendTo(clone);
+          });
+          MAPJS.createSVG('foreignObject').attr({'width': '100%','height': '100%'}).appendTo(result).append(domContainer);
+          source.children().not('svg').each(function () {
+            var objectToClone = $(this),
+            clone = $(this).clone().attr('id','').appendTo(domContainer).css({'left': (objectToClone.data('x') + offset.x), 'top': objectToClone.data('y') + offset.y});
+          });
+          
+          return result;
+      };
+      window.showsvg = function () {
+
+        var svg = $('[data-mapjs-role=stage]').toSVG();
+        $('#container').hide();
+        svg.attr('id', 'svgcontainer').css('position','absolute').appendTo('body').show();
+      };
+      window.hidesvg = function () {
+        $('#svgcontainer').remove();
+        $('#container').show();
+      };
 			(function () {
 				window.onerror = alert;
 				var container = jQuery('#container'),
