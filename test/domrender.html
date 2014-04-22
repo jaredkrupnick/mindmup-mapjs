@@ -95,8 +95,13 @@
 				});
       };
       $.fn.copyStyle = function (domNode) {
-        var self = this, domStyle = window.getComputedStyle(domNode);
-        _.each(domStyle, function (prop) { self.css(prop, domStyle[prop]) });
+        if (!this[0])  { return; } /* children without a role */
+        var self = this, domStyle = window.getComputedStyle(domNode), currentStyle = window.getComputedStyle(this[0]);
+        _.each(domStyle, function (prop) { 
+          if (domStyle[prop] !== currentStyle[prop]) {
+            self.css(prop, domStyle[prop]); 
+          }
+        });
         return self;
       };
       $.fn.cloneAndStyle = function () {
@@ -147,7 +152,6 @@
               deferred.resolve(img);
             };
             img.src = url;
-            window.open(url);
             return deferred.promise();
       }
       window.showcanvas = function () {
