@@ -1,18 +1,19 @@
 /*jslint nomen: true, newcap: true, browser: true*/
-/*global MAPJS, $, Hammer, _, jQuery*/
+/*global MAPJS, $, _, jQuery*/
 
-jQuery.fn.scrollWhenDragging = function () {
+jQuery.fn.scrollWhenDragging = function (scrollPredicate) {
 	/*jslint newcap:true*/
 	'use strict';
-	Hammer(this);
 	return this.each(function () {
 		var element = $(this),
 			dragOrigin;
 		element.on('dragstart', function () {
-			dragOrigin = {
-				top: element.scrollTop(),
-				left: element.scrollLeft()
-			};
+			if (scrollPredicate()) {
+				dragOrigin = {
+					top: element.scrollTop(),
+					left: element.scrollLeft()
+				};
+			}
 		}).on('drag', function (e) {
 			if (e.gesture && dragOrigin) {
 				element.scrollTop(dragOrigin.top - e.gesture.deltaY);
@@ -23,7 +24,7 @@ jQuery.fn.scrollWhenDragging = function () {
 		});
 	});
 };
-$.fn.domMapWidget = function (activityLog, mapModel, touchEnabled) {
+$.fn.domMapWidget = function (activityLog, mapModel, touchEnabled, imageInsertController, dragContainer, resourceTranslator, centerSelectedNodeOnOrientationChange, options) {
 	'use strict';
 	var hotkeyEventHandlers = {
 			'return': 'addSiblingIdea',
@@ -35,6 +36,7 @@ $.fn.domMapWidget = function (activityLog, mapModel, touchEnabled) {
 			'right': 'selectNodeRight',
 			'shift+right': 'activateNodeRight',
 			'shift+left': 'activateNodeLeft',
+			'meta+right ctrl+right meta+left ctrl+left': 'flip',
 			'shift+up': 'activateNodeUp',
 			'shift+down': 'activateNodeDown',
 			'down': 'selectNodeDown',
@@ -65,14 +67,12 @@ $.fn.domMapWidget = function (activityLog, mapModel, touchEnabled) {
 		},
 		actOnKeys = true,
 		self = this;
-	mapModel.addEventListener('inputEnabledChanged', function (canInput) {
+	mapModel.addEventListener('inputEnabledChanged', function (canInput, holdFocus) {
 		actOnKeys = canInput;
-		if (canInput) {
+		if (canInput && !holdFocus) {
 			self.focus();
 		}
 	});
-
-
 
 	return this.each(function () {
 		var element = $(this),
@@ -81,24 +81,59 @@ $.fn.domMapWidget = function (activityLog, mapModel, touchEnabled) {
 			}).attr('data-mapjs-role', 'stage').appendTo(element).data({
 				'offsetX': element.innerWidth() / 2,
 				'offsetY': element.innerHeight() / 2,
-				'width': element.innerWidth(),
-				'height': element.innerHeight(),
+				'width': element.innerWidth() - 20,
+				'height': element.innerHeight() - 20,
 				'scale': 1
-			}).updateStage();
+			}).updateStage(),
+			previousPinchScale = false;
 		element.css('overflow', 'auto').attr('tabindex', 1);
 		if (mapModel.isEditingEnabled()) {
-			element.simpleDraggableContainer();
+			(dragContainer || element).simpleDraggableContainer();
 		}
+
 		if (!touchEnabled) {
-			element.scrollWhenDragging(); //no need to do this for touch, this is native
-		} else {
-			element.on('tap', function (event) {
-				mapModel.dispatchEvent('contextMenuRequested', mapModel.getCurrentlySelectedIdeaId(), event.gesture.center.pageX, event.gesture.center.pageY);
-				event.preventDefault();
-				return false;
+			element.scrollWhenDragging(mapModel.getInputEnabled); //no need to do this for touch, this is native
+			element.on('mousedown', function (e) {
+				if (e.target !== element[0]) {
+					element.css('overflow', 'hidden');
+				}
 			});
+			jQuery(document).on('mouseup', function () {
+				if (element.css('overflow') !== 'auto') {
+					element.css('overflow', 'auto');
+				}
+			});
+			element.imageDropWidget(imageInsertController);
+		} else {
+			element.on('doubletap', function (event) {
+				if (mapModel.requestContextMenu(event.gesture.center.pageX, event.gesture.center.pageY)) {
+					event.preventDefault();
+					event.gesture.preventDefault();
+					return false;
+				}
+			}).on('pinch', function (event) {
+				if (!event || !event.gesture || !event.gesture.scale) {
+					return;
+				}
+				var scale = event.gesture.scale;
+				if (previousPinchScale) {
+					scale = scale / previousPinchScale;
+				}
+				if (Math.abs(scale - 1) < 0.05) {
+					return;
+				}
+				previousPinchScale = event.gesture.scale;
+
+				mapModel.scale('touch', scale, {
+					x: event.gesture.center.pageX - stage.data('offsetX'),
+					y: event.gesture.center.pageY - stage.data('offsetY')
+				});
+			}).on('gestureend', function () {
+				previousPinchScale = false;
+			});
+
 		}
-		MAPJS.DOMRender.viewController(mapModel, stage);
+		MAPJS.DOMRender.viewController(mapModel, stage, touchEnabled, imageInsertController, resourceTranslator, options);
 		_.each(hotkeyEventHandlers, function (mappedFunction, keysPressed) {
 			element.keydown(keysPressed, function (event) {
 				if (actOnKeys) {
@@ -108,7 +143,20 @@ $.fn.domMapWidget = function (activityLog, mapModel, touchEnabled) {
 				}
 			});
 		});
+		if (!touchEnabled) {
+			jQuery(window).on('resize', function () {
+				mapModel.resetView();
+			});
+		}
 
+		jQuery(window).on('orientationchange', function () {
+			if (centerSelectedNodeOnOrientationChange) {
+				mapModel.centerOnNode(mapModel.getSelectedNodeId());
+			} else {
+				mapModel.resetView();
+			}
+
+		});
 		jQuery(document).on('keydown', function (e) {
 			var functions = {
 				'U+003D': 'scaleUp',
@@ -128,6 +176,14 @@ $.fn.domMapWidget = function (activityLog, mapModel, touchEnabled) {
 						mapModel[mappedFunction]('keyboard');
 					}
 				}
+			}
+		}).on('wheel mousewheel', function (e) {
+			var scroll = e.originalEvent.deltaX || (-1 * e.originalEvent.wheelDeltaX);
+			if (scroll < 0 && element.scrollLeft() === 0) {
+				e.preventDefault();
+			}
+			if (scroll > 0 && (element[0].scrollWidth - element.width() - element.scrollLeft() === 0)) {
+				e.preventDefault();
 			}
 		});
 
@@ -151,57 +207,3 @@ $.fn.domMapWidget = function (activityLog, mapModel, touchEnabled) {
 		});
 	});
 };
-
-
-// --------- editing --------------
-
-//--- go live
-// + pich to zoom and scale around zoom point not around centre of viewport!
-// firefox selection bug
-// collaboration - collaborator images - not to break
-// straight lines - not to break
-// optional load of the new renderer
-
-// focus after drop if going off screen
-//
-//- v2 -
-// drag and drop images?
-// consolidate links and connectors into a single concept with different styles?
-// extract generic stage/viewport functions from DOMRender.ViewController into JQuery functions?
-// collaborator images in collaboration
-// straight lines extension
-//		- perhaps read some css property
-//		$('svg').first().css('var-mapjs-line-style', 'curved'); console.log($('svg')[0].style.varMapjsLineStyle
-// prevent scrolling so the screen is blank
-// mapModel - clean up the notion of clicks, in particular context menu which is no longer working like that!
-// support for multiple stages so that eg stage ID is prepended to the node and connector IDs
-// support for selectAll when editing nodes or remove that from the mapModel - do we still use it?
-// html export
-//
-// remaining kinetic mediator events
-//
-// viewing
-// +	mapModel.addEventListener('nodeCreated', function (n) {
-// +	mapModel.addEventListener('connectorRemoved', function (n) {
-// +	mapModel.addEventListener('linkCreated', function (l) {
-// +	mapModel.addEventListener('linkRemoved', function (l) {
-// +	mapModel.addEventListener('nodeMoved', function (n, reason) {
-// +	mapModel.addEventListener('nodeRemoved', function (n) {
-// +	mapModel.addEventListener('connectorCreated', function (n) {
-// +	mapModel.addEventListener('nodeFocusRequested', function (ideaId)  {
-// +	mapModel.addEventListener('layoutChangeComplete', function () {
-// +	mapModel.addEventListener('mapScaleChanged', function (scaleMultiplier, zoomPoint) {
-// +	mapModel.addEventListener('mapViewResetRequested', function () {
-// editing
-// +	mapModel.addEventListener('addLinkModeToggled', function (isOn) {
-// +	mapModel.addEventListener('nodeEditRequested', function (nodeId, shouldSelectAll, editingNew) {
-// +	mapModel.addEventListener('nodeAttrChanged', function (n) {
-// +	mapModel.addEventListener('nodeTitleChanged', function (n) {
-// +	mapModel.addEventListener('activatedNodesChanged', function (activatedNodes, deactivatedNodes) {
-// +	mapModel.addEventListener('linkAttrChanged', function (l) {
-//
-//
-// -	mapModel.addEventListener('nodeDroppableChanged', function (ideaId, isDroppable) {
-// -	mapModel.addEventListener('mapMoveRequested', function (deltaX, deltaY) {
-//		- do we need this? it was used onscroll and onswipe
-//      - we don't need this any more!

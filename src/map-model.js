@@ -1,9 +1,10 @@
 /*jslint forin: true, nomen: true*/
 /*global _, MAPJS, observable*/
-MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvider) {
+MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvider, defaultReorderMargin) {
 	'use strict';
 	var self = this,
 		layoutCalculator = layoutCalculatorArg,
+		reorderMargin = defaultReorderMargin || 20,
 		clipboard = clipboardProvider || new MAPJS.MemoryClipboard(),
 		analytic,
 		currentLayout = {
@@ -11,6 +12,7 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 			connectors: {}
 		},
 		idea,
+		currentLabelGenerator,
 		isInputEnabled = true,
 		isEditingEnabled = true,
 		currentlySelectedIdeaId,
@@ -26,20 +28,38 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 		},
 		horizontalSelectionThreshold = 300,
 		isAddLinkMode,
+		applyLabels = function (newLayout) {
+			if (!currentLabelGenerator) {
+				return;
+			}
+			var labelMap = currentLabelGenerator(idea);
+			_.each(newLayout.nodes, function (node, id) {
+				if (labelMap[id] || labelMap[id] === 0) {
+					node.label = labelMap[id];
+				}
+			});
+		},
 		updateCurrentLayout = function (newLayout) {
-			var nodeId, newNode, oldNode, newConnector, oldConnector, linkId, newLink, oldLink, newActive;
-			for (nodeId in currentLayout.connectors) {
-				newConnector = newLayout.connectors[nodeId];
-				oldConnector = currentLayout.connectors[nodeId];
+			self.dispatchEvent('layoutChangeStarting', _.size(newLayout.nodes) - _.size(currentLayout.nodes));
+			applyLabels(newLayout);
+
+			_.each(currentLayout.connectors, function (oldConnector, connectorId) {
+				var newConnector = newLayout.connectors[connectorId];
 				if (!newConnector || newConnector.from !== oldConnector.from || newConnector.to !== oldConnector.to) {
 					self.dispatchEvent('connectorRemoved', oldConnector);
 				}
-			}
-			for (nodeId in currentLayout.nodes) {
-				oldNode = currentLayout.nodes[nodeId];
-				newNode = newLayout.nodes[nodeId];
+			});
+			_.each(currentLayout.links, function (oldLink, linkId) {
+				var newLink = newLayout.links && newLayout.links[linkId];
+				if (!newLink) {
+					self.dispatchEvent('linkRemoved', oldLink);
+				}
+			});
+			_.each(currentLayout.nodes, function (oldNode, nodeId) {
+				var newNode = newLayout.nodes[nodeId],
+					newActive;
 				if (!newNode) {
-					/*jslint eqeq: true, loopfunc: true*/
+					/*jslint eqeq: true*/
 					if (nodeId == currentlySelectedIdeaId) {
 						self.selectNode(idea.id);
 					}
@@ -49,10 +69,10 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 					}
 					self.dispatchEvent('nodeRemoved', oldNode, nodeId);
 				}
-			}
-			for (nodeId in newLayout.nodes) {
-				oldNode = currentLayout.nodes[nodeId];
-				newNode = newLayout.nodes[nodeId];
+			});
+
+			_.each(newLayout.nodes, function (newNode, nodeId) {
+				var oldNode = currentLayout.nodes[nodeId];
 				if (!oldNode) {
 					self.dispatchEvent('nodeCreated', newNode);
 				} else {
@@ -65,18 +85,19 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 					if (!_.isEqual(newNode.attr || {}, oldNode.attr || {})) {
 						self.dispatchEvent('nodeAttrChanged', newNode);
 					}
+					if (newNode.label !== oldNode.label) {
+						self.dispatchEvent('nodeLabelChanged', newNode);
+					}
 				}
-			}
-			for (nodeId in newLayout.connectors) {
-				newConnector = newLayout.connectors[nodeId];
-				oldConnector = currentLayout.connectors[nodeId];
+			});
+			_.each(newLayout.connectors, function (newConnector, connectorId) {
+				var oldConnector = currentLayout.connectors[connectorId];
 				if (!oldConnector || newConnector.from !== oldConnector.from || newConnector.to !== oldConnector.to) {
 					self.dispatchEvent('connectorCreated', newConnector);
 				}
-			}
-			for (linkId in newLayout.links) {
-				newLink = newLayout.links[linkId];
-				oldLink = currentLayout.links && currentLayout.links[linkId];
+			});
+			_.each(newLayout.links, function (newLink, linkId) {
+				var oldLink = currentLayout.links && currentLayout.links[linkId];
 				if (oldLink) {
 					if (!_.isEqual(newLink.attr || {}, (oldLink && oldLink.attr) || {})) {
 						self.dispatchEvent('linkAttrChanged', newLink);
@@ -84,14 +105,7 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 				} else {
 					self.dispatchEvent('linkCreated', newLink);
 				}
-			}
-			for (linkId in currentLayout.links) {
-				oldLink = currentLayout.links[linkId];
-				newLink = newLayout.links && newLayout.links[linkId];
-				if (!newLink) {
-					self.dispatchEvent('linkRemoved', oldLink);
-				}
-			}
+			});
 			currentLayout = newLayout;
 			if (!self.isInCollapse) {
 				self.dispatchEvent('layoutChangeComplete');
@@ -99,19 +113,26 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 		},
 		revertSelectionForUndo,
 		revertActivatedForUndo,
-		editNewIdea = function (newIdeaId) {
+		selectNewIdea = function (newIdeaId) {
 			revertSelectionForUndo = currentlySelectedIdeaId;
 			revertActivatedForUndo = activatedNodes.slice(0);
 			self.selectNode(newIdeaId);
+		},
+		editNewIdea = function (newIdeaId) {
+			selectNewIdea(newIdeaId);
 			self.editNode(false, true, true);
 		},
 		getCurrentlySelectedIdeaId = function () {
 			return currentlySelectedIdeaId || idea.id;
 		},
+		paused = false,
 		onIdeaChanged = function () {
+			if (paused) {
+				return;
+			}
 			revertSelectionForUndo = false;
 			revertActivatedForUndo = false;
-			updateCurrentLayout(self.reactivate(layoutCalculator(idea)));
+			self.rebuildRequired();
 		},
 		currentlySelectedIdea = function () {
 			return (idea.findSubIdeaById(currentlySelectedIdeaId) || idea);
@@ -124,6 +145,13 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 		};
 	observable(this);
 	analytic = self.dispatchEvent.bind(self, 'analytic', 'mapModel');
+	self.pause = function () {
+		paused = true;
+	};
+	self.resume = function () {
+		paused = false;
+		self.rebuildRequired();
+	};
 	self.getIdea = function () {
 		return idea;
 	};
@@ -135,9 +163,16 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 	};
 	self.analytic = analytic;
 	self.getCurrentlySelectedIdeaId = getCurrentlySelectedIdeaId;
+	self.rebuildRequired = function () {
+		if (!idea) {
+			return;
+		}
+		updateCurrentLayout(self.reactivate(layoutCalculator(idea)));
+	};
 	this.setIdea = function (anIdea) {
 		if (idea) {
 			idea.removeEventListener('changed', onIdeaChanged);
+			paused = false;
 			setActiveNodes([]);
 			self.dispatchEvent('nodeSelectionChanged', currentlySelectedIdeaId, false);
 			currentlySelectedIdeaId = undefined;
@@ -154,10 +189,10 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 	this.getEditingEnabled = function () {
 		return isEditingEnabled;
 	};
-	this.setInputEnabled = function (value) {
+	this.setInputEnabled = function (value, holdFocus) {
 		if (isInputEnabled !== value) {
 			isInputEnabled = value;
-			self.dispatchEvent('inputEnabledChanged', value);
+			self.dispatchEvent('inputEnabledChanged', value, !!holdFocus);
 		}
 	};
 	this.getInputEnabled = function () {
@@ -179,8 +214,8 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 		}
 	};
 	this.clickNode = function (id, event) {
-		var button = event && event.button;
-		if (event && (event.altKey || event.ctrlKey || event.metaKey)) {
+		var button = event && event.button && event.button !== -1;
+		if (event && event.altKey) {
 			self.addLink('mouse', id);
 		} else if (event && event.shiftKey) {
 			/*don't stop propagation, this is needed for drop targets*/
@@ -190,7 +225,7 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 			this.toggleAddLinkMode();
 		} else {
 			this.selectNode(id);
-			if (button && isInputEnabled) {
+			if (button && button !== -1 && isInputEnabled) {
 				self.dispatchEvent('contextMenuRequested', id, event.layerX, event.layerY);
 			}
 		}
@@ -288,7 +323,7 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 			idea.updateLinkAttr(ideaIdFrom, ideaIdTo, 'style', merged);
 		}
 	};
-	this.addSubIdea = function (source, parentId) {
+	this.addSubIdea = function (source, parentId, initialTitle) {
 		if (!isEditingEnabled) {
 			return false;
 		}
@@ -297,10 +332,19 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 		if (isInputEnabled) {
 			idea.batch(function () {
 				ensureNodeIsExpanded(source, target);
-				newId = idea.addSubIdea(target);
+				if (initialTitle) {
+					newId = idea.addSubIdea(target, initialTitle);
+				}
+				else {
+					newId = idea.addSubIdea(target);
+				}
 			});
 			if (newId) {
-				editNewIdea(newId);
+				if (initialTitle) {
+					selectNewIdea(newId);
+				} else {
+					editNewIdea(newId);
+				}
 			}
 		}
 
@@ -319,6 +363,22 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 		if (newId) {
 			editNewIdea(newId);
 		}
+	};
+	this.flip = function (source) {
+
+		if (!isEditingEnabled) {
+			return false;
+		}
+		analytic('flip', source);
+		if (!isInputEnabled || currentlySelectedIdeaId === idea.id) {
+			return false;
+		}
+		var node = currentLayout.nodes[currentlySelectedIdeaId];
+		if (!node || node.level !== 2) {
+			return false;
+		}
+
+		return idea.flip(currentlySelectedIdeaId);
 	};
 	this.addSiblingIdeaBefore = function (source) {
 		var newId, parent, contextRank, newRank;
@@ -346,20 +406,25 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 			editNewIdea(newId);
 		}
 	};
-	this.addSiblingIdea = function (source) {
-		var newId, nextId, parent, contextRank, newRank;
+	this.addSiblingIdea = function (source, optionalNodeId, optionalInitialText) {
+		var newId, nextId, parent, contextRank, newRank, currentId;
+		currentId = optionalNodeId || currentlySelectedIdeaId;
 		if (!isEditingEnabled) {
 			return false;
 		}
 		analytic('addSiblingIdea', source);
 		if (isInputEnabled) {
-			parent = idea.findParent(currentlySelectedIdeaId) || idea;
+			parent = idea.findParent(currentId) || idea;
 			idea.batch(function () {
 				ensureNodeIsExpanded(source, parent.id);
-				newId = idea.addSubIdea(parent.id);
-				if (newId && currentlySelectedIdeaId !== idea.id) {
-					nextId = idea.nextSiblingId(currentlySelectedIdeaId);
-					contextRank = parent.findChildRankById(currentlySelectedIdeaId);
+				if (optionalInitialText) {
+					newId = idea.addSubIdea(parent.id, optionalInitialText);
+				} else {
+					newId = idea.addSubIdea(parent.id);
+				}
+				if (newId && currentId !== idea.id) {
+					nextId = idea.nextSiblingId(currentId);
+					contextRank = parent.findChildRankById(currentId);
 					newRank = parent.findChildRankById(newId);
 					if (contextRank * newRank < 0) {
 						idea.flip(newId);
@@ -370,7 +435,11 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 				}
 			});
 			if (newId) {
-				editNewIdea(newId);
+				if (optionalInitialText) {
+					selectNewIdea(newId);
+				} else {
+					editNewIdea(newId);
+				}
 			}
 		}
 	};
@@ -379,21 +448,21 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 			return false;
 		}
 		analytic('removeSubIdea', source);
+		var removed;
 		if (isInputEnabled) {
-			var shouldSelectParent,
-				previousSelectionId = getCurrentlySelectedIdeaId(),
-				parent = idea.findParent(previousSelectionId);
 			self.applyToActivated(function (id) {
-				var removed  = idea.removeSubIdea(id);
-				/*jslint eqeq: true*/
-				if (previousSelectionId == id) {
-					shouldSelectParent = removed;
+				/*jslint eqeq:true */
+				var parent;
+				if (currentlySelectedIdeaId == id) {
+					parent = idea.findParent(currentlySelectedIdeaId);
+					if (parent) {
+						self.selectNode(parent.id);
+					}
 				}
+				removed  = idea.removeSubIdea(id);
 			});
-			if (shouldSelectParent) {
-				self.selectNode(parent.id);
-			}
 		}
+		return removed;
 	};
 	this.updateTitle = function (ideaId, title, isNew) {
 		if (isNew) {
@@ -574,6 +643,16 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 			firstLiveParent = _.find(parents, idea.findSubIdeaById);
 			self.selectNode(firstLiveParent || idea.id);
 		}
+	};
+	self.contextForNode = function (nodeId) {
+		var node = self.findIdeaById(nodeId),
+				hasChildren = node && node.ideas && _.size(node.ideas) > 0,
+				hasSiblings = idea.hasSiblings(nodeId),
+				canPaste = node && isEditingEnabled && clipboard && clipboard.get();
+		if (node) {
+			return {'hasChildren': !!hasChildren, 'hasSiblings': !!hasSiblings, 'canPaste': !!canPaste};
+		}
+
 	};
 	self.copy = function (source) {
 		var activeNodeIds = [];
@@ -873,7 +952,22 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 				return layout;
 			};
 		}());
-	self.dropNode = function (nodeId, x, y, shiftKey) {
+
+	self.getNodeIdAtPosition = function (x, y) {
+		var isPointOverNode = function (node) { //move to mapModel candidate
+				/*jslint eqeq: true*/
+				return x >= node.x &&
+					y >= node.y &&
+					x <= node.x + node.width &&
+					y <= node.y + node.height;
+			},
+			node = _.find(currentLayout.nodes, isPointOverNode);
+		return node && node.id;
+	};
+	self.autoPosition = function (nodeId) {
+		return idea.updateAttr(nodeId, 'position', false);
+	};
+	self.positionNodeAt = function (nodeId, x, y, manualPosition) {
 		var rootNode = currentLayout.nodes[idea.id],
 			verticallyClosestNode = {
 				id: null,
@@ -882,17 +976,6 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 			parentIdea = idea.findParent(nodeId),
 			parentNode = currentLayout.nodes[parentIdea.id],
 			nodeBeingDragged = currentLayout.nodes[nodeId],
-			isPointOverNode = function (node) { //move to mapModel candidate
-				/*jslint eqeq: true*/
-				return x >= node.x &&
-					y >= node.y &&
-					x <= node.x + node.width &&
-					y <= node.y + node.height;
-			},
-			canDropOnNode = function (node) {
-				/*jslint eqeq: true*/
-				return nodeId != node.id && isPointOverNode(node);
-			},
 			tryFlip = function (rootNode, nodeBeingDragged, nodeDragEndX) {
 				var flipRightToLeft = rootNode.x < nodeBeingDragged.x && nodeDragEndX < rootNode.x,
 					flipLeftToRight = rootNode.x > nodeBeingDragged.x && rootNode.x < nodeDragEndX;
@@ -906,46 +989,183 @@ MAPJS.MapModel = function (layoutCalculatorArg, selectAllTitles, clipboardProvid
 				return nodeBeingDragged.level === 2 ||
 					((nodeBeingDragged.x - parentNode.x) * (x - parentNode.x) > 0);
 			},
-			potentialDropTarget = _.find(currentLayout.nodes, canDropOnNode),
 			result = false,
-			clone;
-		if (potentialDropTarget) {
-			if (shiftKey) {
-				clone = idea.clone(nodeId);
-				if (clone) {
-					idea.paste(potentialDropTarget.id, clone);
-				}
-				return false;
-			}
-			return idea.changeParent(nodeId, potentialDropTarget.id);
-		} else {
-			idea.startBatch();
-			if (currentLayout.nodes[nodeId].level === 2) {
-				tryFlip(rootNode, nodeBeingDragged, x);
-			}
-			_.each(idea.sameSideSiblingIds(nodeId), function (id) {
-				var node = currentLayout.nodes[id];
-				if (y < node.y && node.y < verticallyClosestNode.y) {
-					verticallyClosestNode = node;
-				}
-			});
-			result = idea.positionBefore(nodeId, verticallyClosestNode.id);
-			if (shiftKey && validReposition()) {
-				analytic('nodeManuallyPositioned');
-				maxSequence = _.max(_.map(parentIdea.ideas, function (i) { return (i.id !== nodeId && i.attr && i.attr.position && i.attr.position[2]) || 0; }));
-				result = idea.updateAttr(
-					nodeId,
-					'position',
-					[Math.abs(x - parentNode.x), y - parentNode.y, maxSequence + 1]
-				);
-			}
-			idea.endBatch();
-
+			xOffset;
+		idea.startBatch();
+		if (currentLayout.nodes[nodeId].level === 2) {
+			result = tryFlip(rootNode, nodeBeingDragged, x);
 		}
+		_.each(idea.sameSideSiblingIds(nodeId), function (id) {
+			var node = currentLayout.nodes[id];
+			if (y < node.y && node.y < verticallyClosestNode.y) {
+				verticallyClosestNode = node;
+			}
+		});
+		if (!manualPosition && validReposition()) {
+			self.autoPosition(nodeId);
+		}
+		result = idea.positionBefore(nodeId, verticallyClosestNode.id) || result;
+		if (manualPosition && validReposition()) {
+			if (x < parentNode.x) {
+				xOffset = parentNode.x - x - nodeBeingDragged.width + parentNode.width; /* negative nodes will get flipped so distance is not correct out of the box */
+			} else {
+				xOffset = x - parentNode.x;
+			}
+			analytic('nodeManuallyPositioned');
+			maxSequence = _.max(_.map(parentIdea.ideas, function (i) { return (i.id !== nodeId && i.attr && i.attr.position && i.attr.position[2]) || 0; }));
+			result = idea.updateAttr(
+				nodeId,
+				'position',
+				[xOffset, y - parentNode.y, maxSequence + 1]
+			) || result;
+		}
+		idea.endBatch();
 		return result;
+	};
+	self.dropNode = function (nodeId, dropTargetId, shiftKey) {
+		var clone,
+			parentIdea = idea.findParent(nodeId);
+		if (dropTargetId === nodeId) {
+			return false;
+		}
+		if (shiftKey) {
+			clone = idea.clone(nodeId);
+			if (clone) {
+				idea.paste(dropTargetId, clone);
+			}
+			return false;
+		}
+		if (dropTargetId === parentIdea.id) {
+			return self.autoPosition(nodeId);
+		} else {
+			return idea.changeParent(nodeId, dropTargetId);
+		}
 	};
 	self.setLayoutCalculator = function (newCalculator) {
 		layoutCalculator = newCalculator;
 	};
+	self.dropImage =  function (dataUrl, imgWidth, imgHeight, x, y) {
+		var nodeId,
+			dropOn = function (ideaId, position) {
+				var scaleX = Math.min(imgWidth, 300) / imgWidth,
+					scaleY = Math.min(imgHeight, 300) / imgHeight,
+					scale = Math.min(scaleX, scaleY),
+					existing = idea.getAttrById(ideaId, 'icon');
+				self.setIcon('drag and drop', dataUrl, Math.round(imgWidth * scale), Math.round(imgHeight * scale), (existing && existing.position) || position, ideaId);
+			},
+			addNew = function () {
+				var newId;
+				idea.startBatch();
+				newId = idea.addSubIdea(currentlySelectedIdeaId);
+				dropOn(newId, 'center');
+				idea.endBatch();
+				self.selectNode(newId);
+			};
+		nodeId = self.getNodeIdAtPosition(x, y);
+		if (nodeId) {
+			return dropOn(nodeId, 'left');
+		}
+		addNew();
+	};
+	self.setLabelGenerator = function (labelGenerator) {
+		currentLabelGenerator = labelGenerator;
+		self.rebuildRequired();
+	};
+	self.getReorderBoundary = function (nodeId) {
+		var isRoot = function () {
+				/*jslint eqeq: true*/
+				return nodeId == idea.id;
+			},
+			isFirstLevel = function () {
+				return parentIdea.id === idea.id;
+			},
+			isRightHalf = function (nodeId) {
+				return currentLayout.nodes[nodeId].x >= currentLayout.nodes[idea.id].x;
+			},
+			siblingBoundary = function (siblings, side) {
+				var tops = _.map(siblings, function (node) {
+					return node.y;
+				}),
+				bottoms = _.map(siblings, function (node) {
+					return node.y + node.height;
+				}),
+				result = {
+					'minY': _.min(tops) -  reorderMargin - currentLayout.nodes[nodeId].height,
+					'maxY': _.max(bottoms) +  reorderMargin,
+					'margin': reorderMargin
+				};
+				result.edge = side;
+				if (side === 'left') {
+					result.x = parentNode.x + parentNode.width + reorderMargin;
+				} else {
+					result.x = parentNode.x - reorderMargin;
+				}
+				return result;
+			},
+			parentBoundary = function (side) {
+				var result = {
+					'minY': parentNode.y -  reorderMargin - currentLayout.nodes[nodeId].height,
+					'maxY': parentNode.y + parentNode.height +  reorderMargin,
+					'margin': reorderMargin
+				};
+				result.edge = side;
+				if (side === 'left') {
+					result.x = parentNode.x + parentNode.width + reorderMargin;
+				} else {
+					result.x = parentNode.x - reorderMargin;
+				}
 
+				return result;
+			},
+			otherSideSiblings = function () {
+				var otherSide = _.map(parentIdea.ideas, function (subIdea) {
+					return currentLayout.nodes[subIdea.id];
+				});
+				otherSide = _.without(otherSide, currentLayout.nodes[nodeId]);
+				if (!_.isEmpty(sameSide)) {
+					otherSide = _.difference(otherSide, sameSide);
+				}
+				return otherSide;
+			},
+			parentIdea,
+			parentNode,
+			boundaries = [],
+			sameSide,
+			opposite,
+			primaryEdge,
+			secondaryEdge;
+		if (isRoot(nodeId)) {
+			return false;
+		}
+		parentIdea = idea.findParent(nodeId);
+		parentNode = currentLayout.nodes[parentIdea.id];
+		primaryEdge = isRightHalf(nodeId) ? 'left': 'right';
+		secondaryEdge = isRightHalf(nodeId) ? 'right': 'left';
+		sameSide = _.map(idea.sameSideSiblingIds(nodeId), function (id) {
+			return currentLayout.nodes[id];
+		});
+		if (!_.isEmpty(sameSide)) {
+			boundaries.push(siblingBoundary(sameSide, primaryEdge));
+		}
+		boundaries.push(parentBoundary(primaryEdge));
+		if (isFirstLevel()) {
+			opposite = otherSideSiblings();
+			if (!_.isEmpty(opposite)) {
+				boundaries.push(siblingBoundary(opposite, secondaryEdge));
+			}
+			boundaries.push(parentBoundary(secondaryEdge));
+		}
+		return boundaries;
+	};
+	self.focusAndSelect = function (nodeId) {
+		self.selectNode(nodeId);
+		self.dispatchEvent('nodeFocusRequested', nodeId);
+	};
+	self.requestContextMenu = function (eventPointX, eventPointY) {
+		if (isInputEnabled && isEditingEnabled) {
+			self.dispatchEvent('contextMenuRequested', currentlySelectedIdeaId, eventPointX, eventPointY);
+			return true;
+		}
+		return false;
+	};
 };

@@ -403,14 +403,32 @@ describe('content aggregate', function () {
 				idea.paste(3, _.extend(toPaste, {ideas: {
 					77: {id: 10, title: '77'},
 					1: { id: 11, title: '1'},
-				    '-77': {id: 12, title: '-77'},
-				    '-1': {id: 13, title: '-1'}
+					'-77': {id: 12, title: '-77'},
+					'-1': {id: 13, title: '-1'}
 				}}));
 				var	newChildren = idea.ideas[-10].ideas[1].ideas;
 				expect(newChildren[1].title).toBe('1');
 				expect(newChildren[2].title).toBe('77');
 				expect(newChildren[3].title).toBe('-1');
 				expect(newChildren[4].title).toBe('-77');
+			});
+			it('should clean up attributes from the list of non cloned recursively', function () {
+				idea.setConfiguration({nonClonedAttributes: ['noncloned', 'xnoncloned']});
+				idea.paste(3, _.extend(toPaste, {
+						attr: { cloned: 'ok', noncloned: 'notok' },
+						ideas: {
+							1: {id: 10, title: 'pastedchild', attr: { xcloned: 'ok', noncloned: 'notok', xnoncloned: 'notok' },
+								ideas: { 1: { id: 11, title: 'childchild', attr: {noncloned: 'notok'} } }
+							}
+						}
+					}
+				));
+				var	pastedRoot = idea.ideas[-10].ideas[1],
+					pastedChild = pastedRoot.ideas[1],
+					childChild = pastedRoot.ideas[1].ideas[1];
+				expect(pastedRoot.attr).toEqual({cloned: 'ok'});
+				expect(pastedChild.attr).toEqual({xcloned: 'ok'});
+				expect(childChild.attr).toBeUndefined();
 			});
 			it('should paste to aggregate root if root ID is given', function () {
 				var result = idea.paste(1, toPaste), newRank;
@@ -1918,8 +1936,14 @@ describe('content aggregate', function () {
 			var idea, toPaste, result;
 			beforeEach(function () {
 				idea = MAPJS.content({id: 1, ideas: {'-10': { id: 3}, '-15' : {id: 4}}});
-				toPaste = [{title: 'pasted', id: 1, ideas: {1: { id: 66, title: 'sub sub'}}}, {title: 'pasted2'}];
+				idea.setConfiguration({
+					nonClonedAttributes: ['noncloned']
+				});
+				toPaste = [{title: 'pasted', id: 1, ideas: {1: { id: 66, attr: {cloned: 1, noncloned: 2}, title: 'sub sub'}}}, {title: 'pasted2'}];
 				result = idea.pasteMultiple(3, toPaste);
+			});
+			it('cleans up attributes', function () {
+				expect(idea.ideas[-10].ideas[1].ideas[1].attr).toEqual({cloned: 1});
 			});
 			it('pastes an array of JSONs into the subidea idea by id', function () {
 				expect(idea.ideas[-10].ideas[1].title).toBe('pasted');
@@ -1971,6 +1995,143 @@ describe('content aggregate', function () {
 			result = [];
 			content.traverse(function (idea) { result.push(idea.id); });
 			expect(result).toEqual([1, 11, 111, 112, 12, 121, 13]);
+		});
+		it('does a post-order traversal if second argument is true', function () {
+			var content = MAPJS.content({ id: 1, ideas: { '11': {id: 11, ideas: { 1: { id: 111}, 2: {id: 112} } }, '-12': {id: 12, ideas: { 1: {id: 121} } }, '-13' : {id: 13} } }),
+			result = [];
+			content.traverse(function (idea) { result.push(idea.id); }, true);
+			expect(result).toEqual([111, 112, 11, 121, 12, 13, 1]);
+		});
+	});
+	describe('resource management', function () {
+		var underTest;
+		beforeEach(function () {
+			underTest = MAPJS.content({title: 'test'});
+		});
+		it('stores a resource without cloning (to save memory) and returns the new resource ID in the format NUM/UNIQUE-UUID/', function () {
+			var arr = [1, 2, 3, 4, 5],
+				result = underTest.storeResource(arr);
+			expect(result).toMatch(/^[0-9/+\/[a-z0-9-]*\/$/);
+			expect(underTest.resources[result]).toEqual(arr);
+			arr.push(6);
+			expect(underTest.resources[result][5]).toBe(6);
+		});
+		it('stores a resource using execCommand', function () {
+			var listener = jasmine.createSpy('resource');
+			underTest.addEventListener('resourceStored', listener);
+			underTest.execCommand('storeResource', ['resbody', 'resurl'], 'remoteSession');
+
+			expect(underTest.resources.resurl).toEqual('resbody');
+			expect(listener).toHaveBeenCalledWith('resbody', 'resurl', 'remoteSession');
+		});
+		it('generates a unique UUID with every content initialisation to avoid fake cache hits', function () {
+			var secondContent = MAPJS.content({title: 'test'}),
+				firstKey = underTest.storeResource('123'),
+				secondKey = secondContent.storeResource('123');
+			expect(firstKey).not.toEqual(secondKey);
+		});
+		it('appends the session key to the unique ID if session exists', function () {
+			var secondContent = MAPJS.content({title: 'test'}, 'session1'),
+				secondKey = secondContent.storeResource('123');
+			expect(secondKey).toMatch(/^[0-9/+\/[a-z0-9-]*\/session1$/);
+		});
+		it('retrieves the resource content without cloning (to save memory)', function () {
+			underTest.resources = {abc: [1, 2, 3]};
+			expect(underTest.getResource('abc')).toEqual([1, 2, 3]);
+			underTest.getResource('abc').push(4);
+			expect(underTest.resources.abc[3]).toEqual(4);
+		});
+		it('starts IDs with 1, as a string, without session', function () {
+			expect(underTest.storeResource('xx')).toMatch(/^1\//);
+		});
+		it('starts with ID 1.sessionId with session', function () {
+			underTest = MAPJS.content({}, 'sk');
+			expect(underTest.storeResource('xx')).toMatch(/1\/[0-9a-z-]+\/sk/);
+		});
+		it('assigns sequential resource IDs without session', function () {
+			underTest = MAPJS.content({title: 'test', resources: {'5/1/session1': 'r1', '7/2/session1': 'r2', '9/2/session2': 'r3', '10': 'r4'}});
+			var key = underTest.storeResource('abc');
+			expect(key).toMatch(/^11\//);
+		});
+
+		describe('assigning URLs', function () {
+			var listener;
+			beforeEach(function () {
+				listener = jasmine.createSpy('resource');
+				underTest = MAPJS.content({title: 'test', resources: {'5/1/session1': 'r1', '7/2/session1': 'r2', '9/2/session2': 'r3', '10': 'r4'}}, 'session1');
+				underTest.addEventListener('resourceStored', listener);
+			});
+			it('assigns sequential resource IDs for the session if the content does not match', function () {
+				var key = underTest.storeResource('abc');
+				expect(key).toMatch(/^8\/[^\/]+\/session1$/);
+				expect(listener).toHaveBeenCalled();
+			});
+			it('re-assigns the same URL for the same content - without firing an event - if the key is not supplied and the content matches', function () {
+				var key = underTest.storeResource('r3');
+				expect(key).toEqual('9/2/session2');
+				expect(listener).not.toHaveBeenCalled();
+			});
+			it('does not re-assign the same URL for the same content and fires an event if the key is supplied even if the content matches', function () {
+				var key = underTest.storeResource('r3', '6/6/6');
+				expect(key).toEqual('6/6/6');
+				expect(listener).toHaveBeenCalledWith('r3', '6/6/6', 'session1');
+			});
+		});
+		it('fires event when resource added without cloning the resource (to save memory)', function () {
+			underTest = MAPJS.content({title: 'A'}, 'session1');
+			var arr = [1, 2, 3, 4, 5],
+				listener = jasmine.createSpy('resource'),
+				result;
+			underTest.addEventListener('resourceStored', listener);
+			result = underTest.storeResource(arr);
+			expect(listener).toHaveBeenCalledWith(arr, result, 'session1');
+			arr.push(6);
+			expect(listener.calls.mostRecent().args[0][5]).toEqual(6);
+		});
+		it('adds a resource with a particular key if provided', function () {
+			var key = underTest.storeResource('abc');
+			underTest.storeResource('def', key);
+			expect(underTest.getResource(key)).toEqual('def');
+		});
+	});
+	describe('hasSiblings', function () {
+		var underTest;
+		beforeEach(function () {
+			underTest = MAPJS.content({
+				id: 1,
+				ideas: {
+					1: {
+						id: 2,
+						ideas: {
+							11: {id: 4},
+							12: {id: 5},
+							13: {id: 6}
+						}
+					},
+					'-1': {
+						id: 3,
+						ideas: {
+							21: {id: 7}
+						}
+					}
+				}
+			}, 'session1');
+		});
+		it('should return false if there are no siblings', function () {
+			expect(underTest.hasSiblings(1)).toBeFalsy();
+			expect(underTest.hasSiblings(7)).toBeFalsy();
+		});
+		it('should return false if node id does not exist', function () {
+			expect(underTest.hasSiblings(17)).toBeFalsy();
+		});
+		it('should return true if there are siblings on same side', function () {
+			expect(underTest.hasSiblings(4)).toBeTruthy();
+			expect(underTest.hasSiblings(5)).toBeTruthy();
+			expect(underTest.hasSiblings(6)).toBeTruthy();
+		});
+		it('should return true if siblings are on different sides', function () {
+			expect(underTest.hasSiblings(2)).toBeTruthy();
+			expect(underTest.hasSiblings(3)).toBeTruthy();
 		});
 	});
 });

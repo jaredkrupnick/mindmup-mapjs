@@ -1,4 +1,4 @@
-/*global _, beforeEach, describe, expect, it, jasmine, spyOn, MAPJS*/
+/*global _, beforeEach, describe, expect, it, jasmine, spyOn, MAPJS, observable*/
 describe('MapModel', function () {
 	'use strict';
 	it('should be able to instantiate MapModel', function () {
@@ -13,21 +13,22 @@ describe('MapModel', function () {
 
 		underTest.setInputEnabled(false);
 
-		expect(inputEnabledChangedListener).toHaveBeenCalledWith(false);
+		expect(inputEnabledChangedListener).toHaveBeenCalledWith(false, false);
 	});
-	it('should dispatch inputEnabledChanged event when input is re-enabled', function () {
+	it('should dispatch inputEnabledChanged event when input is re-enabled, passing holdFocus argument if supplied', function () {
 		var underTest = new MAPJS.MapModel(),
 			inputEnabledChangedListener = jasmine.createSpy();
 		underTest.setInputEnabled(false);
 		underTest.addEventListener('inputEnabledChanged', inputEnabledChangedListener);
-		underTest.setInputEnabled(true);
-		expect(inputEnabledChangedListener).toHaveBeenCalledWith(true);
+		underTest.setInputEnabled(true, true);
+		expect(inputEnabledChangedListener).toHaveBeenCalledWith(true, true);
 	});
 	describe('events dispatched by MapModel when idea/layout is changed', function () {
 		var underTest,
 			anIdea,
 			layoutBefore,
 			layoutAfter,
+			mapViewResetRequestedListener,
 			layoutCalculatorLayout;
 		beforeEach(function () {
 			var layoutCalculator = function () {
@@ -98,7 +99,9 @@ describe('MapModel', function () {
 					}
 				}
 			};
+			mapViewResetRequestedListener = jasmine.createSpy('mapViewResetRequestedListener');
 			underTest = new MAPJS.MapModel(layoutCalculator, ['this will have all text selected']);
+			underTest.addEventListener('mapViewResetRequested', mapViewResetRequestedListener);
 			layoutCalculatorLayout = layoutBefore;
 			anIdea = MAPJS.content({
 				id: 4,
@@ -115,7 +118,11 @@ describe('MapModel', function () {
 				}
 			});
 			underTest.setIdea(anIdea);
+
 			layoutCalculatorLayout = layoutAfter;
+		});
+		it('should dispatch a mapViewResetRequested event when an idea is set', function () {
+			expect(mapViewResetRequestedListener).toHaveBeenCalled();
 		});
 		it('should dispatch nodeCreated event when a node is created because idea is changed', function () {
 			var nodeCreatedListener = jasmine.createSpy();
@@ -369,6 +376,53 @@ describe('MapModel', function () {
 			}, [], clipboard);
 			underTest.setIdea(anIdea);
 		});
+		describe('flip', function () {
+			beforeEach(function () {
+				anIdea = MAPJS.content({
+					id: 1,
+					title: 'root',
+					ideas: {
+						10: {
+							id: 2,
+							title: 'child',
+							ideas: {
+								11: { id: 3, title: 'child of child' }
+							}
+						}
+					}
+				});
+				underTest = new MAPJS.MapModel(function () {
+					return {
+						nodes: {1: {level: 1}, 2: {level: 2}, 3: {level: 3}}
+					};
+				}, [], clipboard);
+				underTest.setIdea(anIdea);
+				spyOn(anIdea, 'flip');
+			});
+			it('cannot flip the root node', function () {
+				var result = underTest.flip();
+				expect(result).toBeFalsy();
+				expect(anIdea.flip).not.toHaveBeenCalled();
+			});
+			it('attempts to flip level = 2', function () {
+				underTest.selectNode(2);
+				var result = underTest.flip();
+				expect(result).toBeFalsy();
+				expect(anIdea.flip).toHaveBeenCalledWith(2);
+			});
+			it('cannot flip level > 2', function () {
+				underTest.selectNode(3);
+				var result = underTest.flip();
+				expect(result).toBeFalsy();
+				expect(anIdea.flip).not.toHaveBeenCalled();
+			});
+			it('does not die on unexisting node', function () {
+				underTest.selectNode(223);
+				var result = underTest.flip();
+				expect(result).toBeFalsy();
+				expect(anIdea.flip).not.toHaveBeenCalled();
+			});
+		});
 		describe('updateTitle', function () {
 			beforeEach(function () {
 				spyOn(anIdea, 'updateTitle');
@@ -415,6 +469,14 @@ describe('MapModel', function () {
 				underTest.addSubIdea();
 				expect(anIdea.updateAttr).toHaveBeenCalledWith(1, 'collapsed', false);
 				expect(anIdea.dispatchEvent.calls.count()).toBe(1);
+			});
+			it('should add with a title and select but not invoke editNode if title is supplied', function () {
+				var nodeEditRequestedListener = jasmine.createSpy('node edit requested');
+				underTest.addEventListener('nodeEditRequested', nodeEditRequestedListener);
+				underTest.addSubIdea('source', 2, 'initial title');
+				expect(anIdea.addSubIdea).toHaveBeenCalledWith(2, 'initial title');
+				expect(nodeEditRequestedListener).not.toHaveBeenCalled();
+				expect(underTest.getSelectedNodeId()).toBe(3);
 			});
 		});
 		describe('copy', function () {
@@ -543,9 +605,28 @@ describe('MapModel', function () {
 				underTest.addSiblingIdea();
 				expect(anIdea.addSubIdea).toHaveBeenCalledWith(1);
 			});
+			it('should invoke idea.addSubIdea with a parent of a specified node', function () {
+				var nodeId = anIdea.addSubIdea(2, 'test');
+				anIdea.addSubIdea.calls.reset();
+				underTest.selectNode(1);
+				underTest.addSiblingIdea('keyboard', nodeId);
+				expect(anIdea.addSubIdea).toHaveBeenCalledWith(2);
+			});
 			it('should invoke idea.addSubIdea with a root node if root is currently selected (root has no parent or siblings)', function () {
 				underTest.addSiblingIdea();
 				expect(anIdea.addSubIdea).toHaveBeenCalledWith(1);
+			});
+			it('should add with a title and select, but not invoke editNode if title is supplied', function () {
+				var nodeEditRequestedListener = jasmine.createSpy('node edit requested'),
+						nodeId = anIdea.addSubIdea(2, 'test');
+				anIdea.addSubIdea.calls.reset();
+				underTest.selectNode(1);
+				underTest.addEventListener('nodeEditRequested', nodeEditRequestedListener);
+
+				underTest.addSiblingIdea('keyboard', nodeId, 'initial title');
+				expect(anIdea.addSubIdea).toHaveBeenCalledWith(2, 'initial title');
+				expect(nodeEditRequestedListener).not.toHaveBeenCalled();
+				expect(underTest.getSelectedNodeId()).toBe(4);
 			});
 			it('should expand the parent node if it is collapsed, as a batched event', function () {
 				underTest.collapse('source', true);
@@ -1421,7 +1502,7 @@ describe('MapModel', function () {
 						expect(anIdea.mergeAttrProperty).not.toHaveBeenCalled();
 					});
 					it('should not invoke idea if setting the same prop value - this is to prevent roundtrips from the default background and other calculated props in layout', function () {
-                        underTest.updateStyle('source', 'styleprop', 'oldValue');
+						underTest.updateStyle('source', 'styleprop', 'oldValue');
 						expect(anIdea.mergeAttrProperty).not.toHaveBeenCalled();
 					});
 
@@ -1533,7 +1614,7 @@ describe('MapModel', function () {
 			underTest.addEventListener('analytic', analyticListener);
 		});
 		describe('should dispatch analytic event', function () {
-			var allMethods = ['cut', 'copy', 'paste', 'pasteStyle', 'redo', 'undo', 'scaleUp', 'scaleDown', 'move', 'moveRelative', 'addSubIdea',
+			var allMethods = ['flip', 'cut', 'copy', 'paste', 'pasteStyle', 'redo', 'undo', 'scaleUp', 'scaleDown', 'move', 'moveRelative', 'addSubIdea',
 				'addSiblingIdea', 'addSiblingIdeaBefore', 'removeSubIdea', 'editNode', 'selectNodeLeft', 'selectNodeRight', 'selectNodeUp', 'selectNodeDown',
 				'resetView', 'openAttachment', 'setAttachment', 'activateNodeAndChildren', 'activateNode', 'activateSiblingNodes', 'activateChildren', 'activateSelectedNode', 'toggleAddLinkMode', 'addLink', 'selectLink',
 				'setIcon', 'removeLink'];
@@ -1569,7 +1650,7 @@ describe('MapModel', function () {
 			expect(analyticListener).not.toHaveBeenCalledWith();
 		});
 		describe('when editing is disabled edit methods should not execute ', function () {
-			var editingMethods = ['cut', 'copy', 'paste', 'pasteStyle', 'redo', 'undo', 'moveRelative', 'addSubIdea',
+			var editingMethods = ['flip', 'cut', 'copy', 'paste', 'pasteStyle', 'redo', 'undo', 'moveRelative', 'addSubIdea',
 				'addSiblingIdea', 'addSiblingIdeaBefore', 'removeSubIdea', 'editNode', 'setAttachment', 'updateStyle', 'insertIntermediate', 'updateLinkStyle', 'toggleAddLinkMode', 'addLink', 'selectLink', 'removeLink'];
 			_.each(editingMethods, function (method) {
 				it(method + ' does not execute', function () {
@@ -1862,6 +1943,37 @@ describe('MapModel', function () {
 			expect(calls).toEqual(['nodeFocusRequested', 'nodeSelectionChanged', 'nodeSelectionChanged']);
 		});
 	});
+
+	describe('getNodeIdAtPosition', function () {
+		var underTest, layout;
+		beforeEach(function () {
+			layout = {
+				nodes: {
+					'1.1': { id: '1.1', x: 0, y: 100, width: 10, height: 10 },
+					2: { id: 2, x: -100, y: 100, width: 10, height: 10, attr: {style: {styleprop: 'oldValue'}}},
+					3: { id: 3, x: -100, y: -100, width: 10, height: 10 }
+				}
+			};
+			underTest = new MAPJS.MapModel(function () {
+				return JSON.parse(JSON.stringify(layout)); /* deep clone */
+			});
+			underTest.setIdea(observable({}));
+		});
+
+		describe(' calculates points',
+			[
+				['return false if no node at point', 0, 0, undefined],
+				['return nodeId if smack at centre', 5, 105, '1.1'],
+				['return nodeId if at top left', 0, 100, '1.1'],
+				['return nodeId if at bottom left', -100, -90, 3],
+				['return nodeId if at top right', -100, 110, 2],
+				['return nodeId if at bottom right', -90, 110, 2]
+			], function (x, y, expected) {
+				expect(underTest.getNodeIdAtPosition(x, y)).toEqual(expected);
+			});
+	});
+
+
 	describe('search', function () {
 		var anIdea, underTest;
 		beforeEach(function () {
@@ -1917,6 +2029,464 @@ describe('MapModel', function () {
 				{id: 8, title: 'child of cousin benson'}
 			]);
 
+		});
+	});
+	describe('pause and resume', function () {
+		var anIdea, underTest, spy, layoutCalculator;
+		beforeEach(function () {
+			anIdea = MAPJS.content({
+				id: 1,
+				title: 'center',
+				ideas: {
+					'-2': {
+						id: 2,
+						title: 'lower left'
+					}
+				}
+			});
+			spy = jasmine.createSpy('nodeTitleChanged');
+			layoutCalculator = jasmine.createSpy('layoutCalculator');
+			layoutCalculator.and.returnValue({nodes: {1: {title: 'center', id: 1}, 2: {title: 'lower left', id: 2}}});
+			underTest = new MAPJS.MapModel(layoutCalculator);
+			underTest.setIdea(anIdea);
+			underTest.addEventListener('nodeTitleChanged', spy);
+			underTest.pause();
+			layoutCalculator.calls.reset();
+		});
+		it('ignores any idea updates while it is paused', function () {
+			anIdea.updateTitle(1, 'new center');
+			expect(layoutCalculator).not.toHaveBeenCalled();
+			expect(spy).not.toHaveBeenCalled();
+		});
+		it('processes all updates when resumed', function () {
+			anIdea.updateTitle(1, 'new center');
+			anIdea.updateTitle(2, 'new lower left');
+			layoutCalculator.and.returnValue({nodes: {1: {title: 'new center', id: 1}, 2: {title: 'new lower left', id: 2}}});
+			underTest.resume();
+			expect(layoutCalculator).toHaveBeenCalled();
+			expect(spy).toHaveBeenCalled();
+		});
+		it('unpauses when a new idea is loaded', function () {
+			anIdea = MAPJS.content({id: 1, title: 'five'});
+			underTest.setIdea(anIdea);
+			anIdea.updateTitle(1, 'new center');
+			expect(layoutCalculator).toHaveBeenCalled();
+		});
+	});
+	describe('dropImage', function () {
+		var underTest, layout, idea;
+		beforeEach(function () {
+			idea = MAPJS.content({id: 1, title: 'one',
+				attr: {
+					icon: {
+						url: 'http://www.google.com',
+						width: 100,
+						height: 200,
+						position: 'center'
+					}
+				},
+				ideas: {1: {id: 2, title: 'two'}}});
+			layout = { nodes: { 1: { id: 1, x: 0, y: 100, width: 10, height: 10, }, 2: { id: 2, x: -100, y: 100, width: 10, height: 10} } };
+			underTest = new MAPJS.MapModel(function () {
+				return JSON.parse(JSON.stringify(layout)); /* deep clone */
+			});
+			underTest.setIdea(idea);
+		});
+		describe('when dropped on a node', function () {
+			it('sets the node icon and by default positions to the left', function () {
+				underTest.dropImage('http://url', 50, 102, -90, 110);
+				expect(idea.findSubIdeaById(2).attr.icon).toEqual({
+					url: 'http://url',
+					width: 50,
+					height: 102,
+					position: 'left'
+				});
+			});
+			it('replaces an existing icon and keeps the position', function () {
+				underTest.dropImage('http://url', 50, 102, 5, 105);
+				expect(idea.attr.icon).toEqual({
+					url: 'http://url',
+					width: 50,
+					height: 102,
+					position: 'center'
+				});
+			});
+			it('scales down huge images to make the view sensible', function () {
+				underTest.dropImage('http://url', 500, 1000, -90, 110);
+				expect(idea.findSubIdeaById(2).attr.icon).toEqual({
+					url: 'http://url',
+					width: 150,
+					height: 300,
+					position: 'left'
+				});
+			});
+		});
+		describe('when not dropped on a node', function () {
+			beforeEach(function () {
+				underTest.dropImage('http://url', 500, 1000, 0, 0);
+			});
+			it('creates a new node with empty title and image when not dropped on a node', function () {
+				var newNode = idea.findSubIdeaById(3);
+				expect(newNode).toBeTruthy();
+				expect(newNode.title).toEqual('');
+				expect(newNode.attr.icon).toEqual({
+					url: 'http://url',
+					width: 150,
+					height: 300,
+					position: 'center'
+				});
+			});
+			it('selects the new node', function () {
+				expect(underTest.getCurrentlySelectedIdeaId()).toBe(3);
+			});
+
+			it('creates a node and adds the image as a batch, so we can undo it', function () {
+				idea.undo();
+				expect(idea.findSubIdeaById(3)).toBeFalsy();
+			});
+		});
+	});
+	describe('labels', function () {
+		var underTest, layout, idea, labelGenerator;
+		beforeEach(function () {
+			idea = MAPJS.content({id: 1, title: 'one',
+				attr: {
+					icon: {
+						url: 'http://www.google.com',
+						width: 100,
+						height: 200,
+						position: 'center'
+					}
+				},
+				ideas: {1: {id: 2, title: 'two'}}});
+			layout = { nodes: {
+					1: { id: 1, x: 0, y: 100, width: 10, height: 10, },
+					2: { id: 2, x: -100, y: 100, width: 10, height: 10},
+					3: {id: 3, x: 10, y: 10, width: 100, height: 50 }
+				}
+			};
+			underTest = new MAPJS.MapModel(function () {
+				return JSON.parse(JSON.stringify(layout)); /* deep clone */
+			});
+			underTest.setIdea(idea);
+			labelGenerator = jasmine.createSpy('labelGenerator');
+		});
+		describe('setLabelGenerator', function () {
+			beforeEach(function () {
+				labelGenerator.and.returnValue({1: 'l1', 2: 'l2'});
+				underTest.setLabelGenerator(labelGenerator);
+			});
+			it('rebuilds labels for all nodes in layout when generator changed', function () {
+				expect(labelGenerator).toHaveBeenCalledWith(idea);
+				expect(underTest.getCurrentLayout().nodes[1].label).toBe('l1');
+				expect(underTest.getCurrentLayout().nodes[2].label).toBe('l2');
+			});
+			it('shows numeric 0 labels but not false or empty string or undefined', function () {
+				labelGenerator.and.returnValue({1: false, 2: 0, 3: undefined});
+				idea.dispatchEvent('changed');
+				expect(underTest.getCurrentLayout().nodes[1].label).toBeUndefined();
+				expect(underTest.getCurrentLayout().nodes[2].label).toBe(0);
+				expect(underTest.getCurrentLayout().nodes[3].label).toBeUndefined();
+
+			});
+			it('clears labels for all nodes in layout when generator removed', function () {
+				underTest.setLabelGenerator();
+				expect(underTest.getCurrentLayout().nodes[1].label).toBeUndefined();
+				expect(underTest.getCurrentLayout().nodes[2].label).toBeUndefined();
+			});
+			it('applies a label generator to all nodes in a layout when the layout changes', function () {
+				labelGenerator.and.returnValue({1: 'p1', 2: 'p2'});
+				idea.dispatchEvent('changed');
+				expect(underTest.getCurrentLayout().nodes[1].label).toBe('p1');
+				expect(underTest.getCurrentLayout().nodes[2].label).toBe('p2');
+			});
+		});
+		describe('nodeLabelChanged event', function () {
+			it('is dispatched only for attributes where labels actually change on node change', function () {
+				var spy;
+				labelGenerator.and.returnValue({1: 'l1', 2: 'l2'});
+				underTest.setLabelGenerator(labelGenerator);
+				labelGenerator.and.returnValue({1: 'x1', 2: 'l2', 3: 'x3'});
+				spy = jasmine.createSpy('nodeLabelChangedListener');
+				underTest.addEventListener('nodeLabelChanged', spy);
+				idea.dispatchEvent('changed');
+				expect(spy).toHaveBeenCalledWith(underTest.getCurrentLayout().nodes[1]);
+				expect(spy).toHaveBeenCalledWith(underTest.getCurrentLayout().nodes[3]);
+				expect(spy.calls.count()).toBe(2);
+			});
+		});
+	});
+	describe('getReorderBoundary', function () {
+		var underTest, layout, idea, margin,
+			firstBoundary = function (nodeId) {
+				return underTest.getReorderBoundary(nodeId)[0];
+			},
+			secondBoundary = function (nodeId) {
+				return underTest.getReorderBoundary(nodeId)[1];
+			};
+		beforeEach(function () {
+			idea = MAPJS.content({
+					id: 1,
+					ideas: {
+						1: {
+							id: 11
+						},
+						2: {
+							id: 12,
+							ideas: {
+								1: {id: 121},
+								2: {id: 122}
+							}
+						},
+						3: {
+							id: 13,
+							ideas: {
+								1: {id: 131}
+							}
+						},
+						'-1': {
+							id: 14,
+							ideas: {
+								1: {id: 141},
+								2: {id: 142}
+							}
+						},
+						'-2': {
+							id: 15
+						},
+						'-3': {
+							id: 16
+						},
+					}
+				});
+			layout = { nodes: {
+					1: { id: 1, x: -50, y: -30, width: 100, height: 60 }, /* ends at x= 50 */
+					11: { id: 11, x: 80, y: -100, width: 10, height: 10},
+					12: { id: 12, x: 70, y: -60, width: 30, height: 10},  /* ends at x=100 */
+					121: { id: 121, x: 115, y: -60, width: 10, height: 11},
+					122: { id: 122, x: 135, y: -30, width: 10, height: 10},
+					13: { id: 13, x: 70, y: 10, width: 30, height: 20},
+					131: {id: 131, x: 120, y: 10, width: 30, height: 20},
+					14: { id: 14, x: -100, y: 10, width: 30, height: 10},
+					141: { id: 141, x: -150, y: -20, width: 30, height: 10},
+					142: { id: 142, x: -160, y: 20, width: 30, height: 10},
+					15: { id: 15, x: -80, y: 10, width: 10, height: 10},
+					16: { id: 15, x: -80, y: 30, width: 30, height: 30}
+				}
+			};
+			margin = 20;
+			underTest = new MAPJS.MapModel(function () {
+				return JSON.parse(JSON.stringify(layout)); /* deep clone */
+			}, undefined, undefined, margin);
+			underTest.setIdea(idea);
+		});
+		it('returns false for root', function () {
+			expect(underTest.getReorderBoundary(1)).toBeFalsy();
+		});
+		describe('for right nodes', function () {
+			it('matches against the left edge', function () {
+				_.each([121, 11, 12, 122], function (nodeId) {
+					expect(firstBoundary(nodeId).edge).toEqual('left');
+				});
+			});
+			it('returns the right edge of parent + margin', function () {
+				expect(firstBoundary(121).x).toEqual(120);
+				expect(firstBoundary(11).x).toEqual(70);
+				expect(secondBoundary(121).x).toEqual(120);
+				expect(secondBoundary(11).x).toEqual(70);
+			});
+			it('wraps the first boundary around siblings if it has siblings', function () {
+				expect(_.pick(firstBoundary(121), 'minY', 'maxY')).toEqual({minY: -61, maxY: 0});
+				expect(_.pick(firstBoundary(11), 'minY', 'maxY')).toEqual({minY: -90, maxY: 50});
+			});
+			it('wraps the second boundary around parent if node has siblings', function () {
+				expect(_.pick(secondBoundary(121), 'minY', 'maxY')).toEqual({minY: -91, maxY: -30});
+				expect(_.pick(secondBoundary(11), 'minY', 'maxY')).toEqual({minY: -60, maxY: 50});
+			});
+			it('wraps the first boundary around parent if no siblings', function () {
+				expect(_.pick(firstBoundary(131), 'edge', 'x', 'minY', 'maxY')).toEqual({edge: 'left', x: 120, minY: -30, maxY: 50});
+				expect(underTest.getReorderBoundary(131).length).toBe(1);
+			});
+			it('wraps the third boundary over other side siblings for level 1 nodes', function () {
+				expect(_.pick(underTest.getReorderBoundary(11)[2], 'edge', 'x', 'minY', 'maxY')).toEqual({edge: 'right', x: -70, minY: -20, maxY: 80});
+			});
+			it('wraps the fourth boundary over the other side parent for level 1 nodes', function () {
+				expect(_.pick(underTest.getReorderBoundary(11)[3], 'edge', 'x', 'minY', 'maxY')).toEqual({edge: 'right', x: -70, minY: -60, maxY: 50});
+			});
+		});
+		describe('for left nodes', function () {
+			it('matches against the right edge', function () {
+				_.each([14, 141, 142, 15, 16], function (nodeId) {
+					expect(firstBoundary(nodeId).edge).toEqual('right');
+				});
+			});
+			it('returns the left edge of parent - margin', function () {
+				expect(firstBoundary(141).x).toEqual(-120);
+				expect(firstBoundary(14).x).toEqual(-70);
+			});
+			it('wraps the first boundary around siblings', function () {
+				expect(_.pick(firstBoundary(141), 'minY', 'maxY')).toEqual({minY: -10, maxY: 50});
+				expect(_.pick(firstBoundary(15), 'minY', 'maxY')).toEqual({minY: -20, maxY: 80});
+			});
+		});
+	});
+	describe('focusAndSelect', function () {
+		var underTest, anIdea, listener;
+		beforeEach(function () {
+			anIdea = MAPJS.content({
+				id: 1,
+				title: 'root',
+				ideas: {
+					10: {
+						id: 2,
+						title: 'child',
+						ideas: {
+							11: { id: 3, title: 'child of child' }
+						}
+					}
+				}
+			});
+			underTest = new MAPJS.MapModel(function () {
+				return {
+					nodes: {1: {level: 1}, 2: {level: 2}, 3: {level: 3}}
+				};
+			});
+			underTest.setIdea(anIdea);
+			listener = jasmine.createSpy();
+			underTest.selectNode(1);
+		});
+		it('selects the node', function () {
+			underTest.addEventListener('nodeSelectionChanged', listener);
+			underTest.focusAndSelect(2);
+			expect(listener).toHaveBeenCalledWith(2, true);
+		});
+		it('dispatches nodeFocusRequested for the node', function () {
+			underTest.addEventListener('nodeFocusRequested', listener);
+			underTest.focusAndSelect(2);
+			expect(listener).toHaveBeenCalledWith(2);
+		});
+	});
+	describe('contextForNode', function () {
+		var underTest, anIdea, clipboard,
+				layoutCalculator = function () {
+				return {
+					nodes: {1: {level: 1}, 2: {level: 2}, 3: {level: 3}}
+				};
+			};
+		beforeEach(function () {
+			anIdea = MAPJS.content({
+				id: 1,
+				title: 'root',
+				ideas: {
+					10: {
+						id: 2,
+						title: '1st child',
+						ideas: {
+							11: { id: 3, title: '1st child of 1st child' },
+							12: { id: 5, title: '2nd child of 1st child' }
+						}
+					},
+					'-12': {
+						id: 4,
+						title: '2nd child',
+						ideas: {
+							11: { id: 6, title: '1st child of 2nd child' },
+						}
+					}
+				}
+			});
+			clipboard = new MAPJS.MemoryClipboard();
+			underTest = new MAPJS.MapModel(layoutCalculator, undefined, clipboard);
+			underTest.setIdea(anIdea);
+		});
+		it('should be undefined when there is no node for node id', function () {
+			expect(underTest.contextForNode(20)).toBeUndefined();
+		});
+		describe('canPaste', function () {
+			it('should be false when clipboard is empty', function () {
+				expect(underTest.contextForNode(1).canPaste).toBe(false);
+			});
+			describe('when clipboard is not empty', function () {
+				beforeEach(function () {
+					clipboard.put('hoo har');
+				});
+				it('should be true when editing is enabled', function () {
+					expect(underTest.contextForNode(1).canPaste).toBe(true);
+				});
+				it('should be false when editing is disabled', function () {
+					underTest.setEditingEnabled(false);
+					expect(underTest.contextForNode(1).canPaste).toBe(false);
+				});
+			});
+			describe('hasChildren', function () {
+				it('should be true when the node has children', function () {
+					expect(underTest.contextForNode(1).hasChildren).toBe(true);
+					expect(underTest.contextForNode(2).hasChildren).toBe(true);
+					expect(underTest.contextForNode(4).hasChildren).toBe(true);
+				});
+				it('should be false when the node does not have children', function () {
+					expect(underTest.contextForNode(3).hasChildren).toBe(false);
+					expect(underTest.contextForNode(5).hasChildren).toBe(false);
+					expect(underTest.contextForNode(6).hasChildren).toBe(false);
+				});
+			});
+			describe('hasSiblings', function () {
+				it('should be true when the node has siblings', function () {
+					expect(underTest.contextForNode(2).hasSiblings).toBe(true);
+					expect(underTest.contextForNode(3).hasSiblings).toBe(true);
+					expect(underTest.contextForNode(4).hasSiblings).toBe(true);
+					expect(underTest.contextForNode(5).hasSiblings).toBe(true);
+				});
+				it('should be false when the node does not have siblings', function () {
+					expect(underTest.contextForNode(1).hasSiblings).toBe(false);
+					expect(underTest.contextForNode(6).hasSiblings).toBe(false);
+				});
+
+			});
+		});
+	});
+	describe('requestContextMenu', function () {
+		var underTest, anIdea, listener;
+		beforeEach(function () {
+			anIdea = MAPJS.content({
+				id: 1,
+				title: 'root',
+				ideas: {
+					10: {
+						id: 2,
+						title: 'child',
+						ideas: {
+							11: { id: 3, title: 'child of child' }
+						}
+					}
+				}
+			});
+			underTest = new MAPJS.MapModel(function () {
+				return {
+					nodes: {1: {level: 1}, 2: {level: 2}, 3: {level: 3}}
+				};
+			});
+			underTest.setIdea(anIdea);
+			listener = jasmine.createSpy('contextMenuRequested');
+			underTest.addEventListener('contextMenuRequested', listener);
+			underTest.selectNode(3);
+		});
+		it('dispatches contextMenuRequested with the currently selected idea and coordinates from the argument', function () {
+			var result = underTest.requestContextMenu(100,300);
+			expect(result).toBeTruthy();
+			expect(listener).toHaveBeenCalledWith(3, 100, 300);
+		});
+		it('does not dispatch event if input is disabled', function () {
+			underTest.setInputEnabled(false);
+			var result = underTest.requestContextMenu(100,300);
+			expect(result).toBeFalsy();
+			expect(listener).not.toHaveBeenCalled();
+		});
+		it('does not dispatch event if editing is disabled', function () {
+			underTest.setEditingEnabled(false);
+			var result = underTest.requestContextMenu(100,300);
+			expect(result).toBeFalsy();
+			expect(listener).not.toHaveBeenCalled();
 		});
 	});
 });

@@ -1,84 +1,25 @@
 /*global MAPJS, jQuery, describe, it, beforeEach, afterEach, _, expect, navigator, jasmine, Color, spyOn, observable, window*/
-
-beforeEach(function () {
-	'use strict';
-	jasmine.addMatchers({
-		toHaveBeenCalledOnJQueryObject: function () {
-			return {
-				compare: function (actual, expected) {
-					return {
-						pass: actual.calls && actual.calls.mostRecent() && actual.calls.mostRecent().object[0] === expected[0]
-					};
-				}
-			};
-		},
-		toHaveOwnStyle: function () {
-			var checkStyle = function (element, style) {
-				if (element.attr('style')) {
-					if (_.isArray(style)) {
-						return _.find(style, function (aStyle) { return checkStyle(element, aStyle); });
-					} else {
-						return element.attr('style').indexOf(style) >= 0;
-					}
-				}
-				return false;
-			};
-			return {
-				compare: function (element, styleName) {
-					var result = {
-						pass: checkStyle(element, styleName)
-					};
-					if (result.pass) {
-						result.message = element.attr('style') + ' has own style ' + styleName;
-					} else {
-						result.message = element[0] + ' does not have own style ' + styleName + ' (' + element.attr('style') + ')';
-					}
-					return result;
-				}
-			};
-		}
-	});
-});
-describe('toHaveBeenCalledOnJQueryObject matcher', function () {
-	'use strict';
-	var underTest1, underTest2;
-	beforeEach(function () {
-		underTest1 = jQuery('<div id="fst">').appendTo('body');
-		underTest2 = jQuery('<div id="snd">').appendTo('body');
-		spyOn(jQuery.fn, 'focus');
-	});
-	afterEach(function () {
-		underTest1.remove();
-		underTest2.remove();
-	});
-	it('checks that a function was applied to a jQuery selector by comparing elements', function () {
-		underTest1.focus();
-		expect(jQuery.fn.focus).toHaveBeenCalledOnJQueryObject(underTest1);
-		expect(jQuery.fn.focus).toHaveBeenCalledOnJQueryObject(jQuery('#fst'));
-		expect(jQuery.fn.focus).not.toHaveBeenCalledOnJQueryObject(underTest2);
-		expect(jQuery.fn.focus).not.toHaveBeenCalledOnJQueryObject(jQuery('#snd'));
-	});
-});
-describe('toHaveOwnStyle', function () {
-	'use strict';
-	var underTest;
-	beforeEach(function () {
-		underTest = jQuery('<div id="fst">').appendTo('body');
-	});
-	afterEach(function () {
-		underTest.remove();
-	});
-	it('checks that a function was applied to a jQuery selector by comparing elements', function () {
-		underTest.css('outline', 'none');
-		expect(underTest).toHaveOwnStyle('outline');
-		expect(underTest).not.toHaveOwnStyle('display');
-	});
-	it('checks for any of the styles in the array', function () {
-		underTest.css('outline', 'none');
-		expect(underTest).toHaveOwnStyle(['outline', 'display']);
-		expect(underTest).not.toHaveOwnStyle(['display', 'z-index']);
-	});
-
+describe('innerText', function () {
+  'use strict';
+  var underTest;
+  beforeEach(function () {
+    jQuery.fn.innerText.check = false;
+    underTest = jQuery('<span></span>').appendTo('body');
+    spyOn(jQuery.fn, 'text').and.callThrough();
+  });
+  afterEach(function () {
+    underTest.detach();
+  });
+  it('executes using .text if content does not contain BR elements', function () {
+    underTest.html('does\nthis\nhave\nbreaks');
+    expect(underTest.innerText()).toEqual('does\nthis\nhave\nbreaks');
+    expect(jQuery.fn.text).toHaveBeenCalledOnJQueryObject(underTest);
+  });
+  it('removes html tags and replaces BR with newlines if content contains BR elements (broken firefox contenteditable)', function () {
+    underTest.html('does<br>this<br/>ha<a href="">ve</a><br>breaks');
+    expect(underTest.innerText()).toEqual('does\nthis\nhave\nbreaks');
+    expect(jQuery.fn.text).not.toHaveBeenCalledOnJQueryObject(underTest);
+  });
 });
 describe('updateStage', function () {
 	'use strict';
@@ -221,6 +162,7 @@ describe('editNode', function () {
 		node = jQuery('<div>').data('title', 'some title').appendTo('body');
 		textBox = jQuery('<div>').attr('data-mapjs-role', 'title').text('some old text').appendTo(node);
 		spyOn(jQuery.fn, 'focus').and.callThrough();
+		spyOn(jQuery.fn, 'shadowDraggable').and.callThrough();
 		resolved = jasmine.createSpy('resolved');
 		rejected = jasmine.createSpy('rejected');
 		node.editNode().then(resolved, rejected);
@@ -257,6 +199,10 @@ describe('editNode', function () {
 	it('focuses on the text box', function () {
 		expect(jQuery.fn.focus).toHaveBeenCalledOnJQueryObject(textBox);
 	});
+	it('deactivates dragging on the node', function () {
+		expect(jQuery.fn.shadowDraggable).toHaveBeenCalledOnJQueryObject(node);
+		expect(jQuery.fn.shadowDraggable).toHaveBeenCalledWith({disable: true});
+	});
 	it('puts the caret at the end of the textbox', function () {
 		var selection = window.getSelection();
 		expect(selection.type).toEqual('Caret');
@@ -277,6 +223,28 @@ describe('editNode', function () {
 			textBox.trigger('blur');
 			expect(textBox.attr('contenteditable')).toBeFalsy();
 			expect(resolved).toHaveBeenCalledWith('changed text');
+		});
+    it('consumes multi-line text', function () {
+			textBox.html('changed\ntext');
+			textBox.trigger('blur');
+			expect(resolved).toHaveBeenCalledWith('changed\ntext');
+    });
+    it('consumes broken firefox contenteditable multi-line text', function () {
+			textBox.html('changed<br>text');
+			textBox.trigger('blur');
+			expect(resolved).toHaveBeenCalledWith('changed\ntext');
+    });
+    it('converts text box content to text using innerText', function () {
+      spyOn(jQuery.fn, 'innerText').and.returnValue('hello there');
+			textBox.trigger('blur');
+			expect(resolved).toHaveBeenCalledWith('hello there');
+    });
+		it('reactivates dragging when focus is lost', function () {
+			node.attr('mapjs-level', 2);
+			jQuery.fn.shadowDraggable.calls.reset();
+			textBox.trigger('blur');
+			expect(jQuery.fn.shadowDraggable).toHaveBeenCalledOnJQueryObject(node);
+			expect(jQuery.fn.shadowDraggable.calls.mostRecent().args).toEqual([]);
 		});
 		it('completes editing when enter is pressed and prevents further keydown event propagation', function () {
 			var event = jQuery.Event('keydown', { which: 13 });
@@ -519,9 +487,9 @@ describe('updateLink', function () {
 	it('draws a straight between the borders of two nodes', function () {
 		underTest.updateLink();
 		var path = underTest.find('path');
-		expect(path.length).toBe(1);
-		expect(path.attr('class')).toEqual('mapjs-link');
-		expect(path.attr('d')).toEqual('M100,20L136,120');
+		expect(path.length).toBe(2);
+		expect(path.filter('.mapjs-link').attr('d')).toEqual('M100,20L136,120');
+		expect(path.filter('.mapjs-link-hit').attr('d')).toEqual('M100,20L136,120');
 	});
 	it('positions the link to the upper left edge of the nodes, and expands it to the bottom right edge of the nodes', function () {
 		underTest.updateLink();
@@ -642,7 +610,11 @@ describe('updateNodeContent', function () {
 		underTest = jQuery('<span>').appendTo('body');
 		nodeContent = {
 			title: 'Hello World!',
-			level: 3
+			level: 3,
+			x: 10,
+			y: 20,
+			width: 30,
+			height: 40
 		};
 	});
 	afterEach(function () {
@@ -651,6 +623,27 @@ describe('updateNodeContent', function () {
 	});
 	it('returns itself to allow chaining', function () {
 		expect(underTest.updateNodeContent(nodeContent)[0]).toEqual(underTest[0]);
+	});
+	describe('dimensions', function () {
+		it('sets the x, y, width, height properties according to node values', function () {
+			underTest.updateNodeContent(nodeContent);
+			expect(underTest.data('x')).toBe(10);
+			expect(underTest.data('y')).toBe(20);
+			expect(underTest.data('width')).toBe(30);
+			expect(underTest.data('height')).toBe(40);
+		});
+		it('rounds x, y, width and height to improve performance', function () {
+			nodeContent = {id: '12', title: 'zeka', x: 10.02, y: 19.99, width: 30.2, height: 40.3};
+			underTest.updateNodeContent(nodeContent);
+			expect(underTest.data('x')).toBe(10);
+			expect(underTest.data('y')).toBe(20);
+			expect(underTest.data('width')).toBe(30);
+			expect(underTest.data('height')).toBe(40);
+		});
+		it('tags the node with a cache mark', function () {
+			underTest.updateNodeContent(nodeContent);
+			expect(underTest.data('nodeCacheMark')).toEqual({ level: 3, title : 'Hello World!', icon : undefined, collapsed : undefined });
+		});
 	});
 	describe('node text', function () {
 		it('sets the node title as the DOM span text', function () {
@@ -752,6 +745,7 @@ describe('updateNodeContent', function () {
 		});
 		describe('when icon is set', function () {
 			beforeEach(function () {
+				MAPJS.DOMRender.fixedLayout = false;
 				nodeContent.attr = {
 					icon: {
 						url: 'http://iconurl/',
@@ -770,12 +764,21 @@ describe('updateNodeContent', function () {
 				expect(underTest.css('background-repeat')).toBe('no-repeat');
 				expect(underTest.css('background-size')).toBe('400px 500px');
 			});
+			it('translates the URL using the resource translator if provided', function () {
+				var translator = jasmine.createSpy('translator');
+				translator.and.returnValue('data:xxx');
+				underTest.updateNodeContent(nodeContent, translator);
+				expect(translator).toHaveBeenCalledWith('http://iconurl/');
+				expect(underTest.css('background-image')).toBe('url(data:xxx)');
+			});
 			it('positions center icons behind text and expands the node if needed to fit the image', function () {
 				underTest.updateNodeContent(nodeContent);
 				expect(underTest.css('background-position')).toBe('50% 50%');
 				expect(underTest.css('min-width')).toEqual('400px');
 				expect(underTest.css('min-height')).toEqual('500px');
-				expect(textBox.css('margin-top')).toBe('241px');
+				if (!isHeadless()) {
+					expect(textBox.css('margin-top')).toBe('241px');
+				}
 			});
 			it('positions center icons behind text and does not expand the node if not needed', function () {
 				nodeContent.attr.icon.width = 5;
@@ -789,12 +792,11 @@ describe('updateNodeContent', function () {
 			it('positions left icons left of node text and vertically centers the text', function () {
 				nodeContent.attr.icon.position = 'left';
 				underTest.updateNodeContent(nodeContent);
-				if (!isHeadless()) {
-					expect(underTest.css('background-position')).toBe('left 5px top 50%');
-				}
-
+				expect(underTest.css('background-position')).toBe('5px 50%');
 				expect(underTest.css('padding-left')).toEqual('410px');
-				expect(textBox.css('margin-top')).toBe('241px');
+				if (!isHeadless()) {
+					expect(textBox.css('margin-top')).toBe('241px');
+				}
 			});
 			it('positions right icons right of node text and vertically centers the text', function () {
 				nodeContent.attr.icon.position = 'right';
@@ -805,15 +807,26 @@ describe('updateNodeContent', function () {
 				}
 
 				expect(underTest.css('padding-right')).toEqual('410px');
-				expect(textBox.css('margin-top')).toBe('241px');
+				if (!isHeadless()) {
+					expect(textBox.css('margin-top')).toBe('241px');
+				}
 			});
+			it('positions right icons right of node text and vertically centers the text for a fixed layouts', function () {
+				MAPJS.DOMRender.fixedLayout = true;
+				nodeContent.attr.icon.position = 'right';
+				underTest.updateNodeContent(nodeContent);
+				expect(underTest.css('background-position')).toBe('170px 50%');
+				expect(underTest.css('padding-right')).toEqual('410px');
+				if (!isHeadless()) {
+					expect(textBox.css('margin-top')).toBe('241px');
+				}
+			});
+
 			it('positions top icons top of node text and horizontally centers the text', function () {
 				nodeContent.attr.icon.position = 'top';
 				underTest.updateNodeContent(nodeContent);
 
-				if (!isHeadless()) {
-					expect(underTest.css('background-position')).toBe('left 50% top 5px');
-				}
+				expect(underTest.css('background-position')).toBe('50% 5px');
 				expect(underTest.css('padding-top')).toEqual('510px');
 				expect(underTest.css('min-width')).toEqual('400px');
 				expect(textBox.css('margin-left')).toBe('120px');
@@ -824,6 +837,17 @@ describe('updateNodeContent', function () {
 
 				if (!isHeadless()) {
 					expect(underTest.css('background-position')).toBe('left 50% bottom 5px');
+				}
+				expect(underTest.css('padding-bottom')).toEqual('510px');
+				expect(underTest.css('min-width')).toEqual('400px');
+				expect(textBox.css('margin-left')).toBe('120px');
+			});
+			it('positions bottom icons bottom of node text and horizontally centers the text for fixed layout', function () {
+				MAPJS.DOMRender.fixedLayout = true;
+				nodeContent.attr.icon.position = 'bottom';
+				underTest.updateNodeContent(nodeContent);
+				if (!isHeadless()) {
+					expect(underTest.css('background-position')).toBe('50% 23px');
 				}
 				expect(underTest.css('padding-bottom')).toEqual('510px');
 				expect(underTest.css('min-width')).toEqual('400px');
@@ -944,7 +968,40 @@ describe('updateNodeContent', function () {
 				expect(underTest.find('a.mapjs-attachment').is(':visible')).toBeFalsy();
 			});
 		});
-
+	});
+	describe('label handling', function () {
+		describe('when there is a label', function () {
+			beforeEach(function () {
+				nodeContent.label = 'foo';
+			});
+			it('shows the label element', function () {
+				underTest.updateNodeContent(nodeContent);
+				expect(underTest.find('.mapjs-label').is(':visible')).toBeTruthy();
+				expect(underTest.find('.mapjs-label').text()).toEqual('foo');
+			});
+			it('should reuse and show existing element', function () {
+				jQuery('<span class="mapjs-label">hello</span>').appendTo(underTest).hide();
+				underTest.updateNodeContent(nodeContent);
+				expect(underTest.find('.mapjs-label').length).toBe(1);
+				expect(underTest.find('.mapjs-label').is(':visible')).toBeTruthy();
+				expect(underTest.find('.mapjs-label').text()).toEqual('foo');
+			});
+		});
+		describe('when there is no label', function () {
+			it('hides the label element', function () {
+				jQuery('<span class="mapjs-label">hello</span>').appendTo(underTest);
+				underTest.updateNodeContent(nodeContent);
+				expect(underTest.find('.mapjs-label').is(':visible')).toBeFalsy();
+			});
+		});
+		describe('when label is equal to numeric 0', function () {
+			it('hides the label element', function () {
+				nodeContent.label = 0;
+				underTest.updateNodeContent(nodeContent);
+				expect(underTest.find('.mapjs-label').is(':visible')).toBeTruthy();
+				expect(underTest.find('.mapjs-label').text()).toEqual('0');
+			});
+		});
 	});
 });
 describe('MAPJS.DOMRender', function () {
@@ -973,7 +1030,7 @@ describe('MAPJS.DOMRender', function () {
 		var newElement, oldUpdateNodeContent, idea;
 		beforeEach(function () {
 			oldUpdateNodeContent = jQuery.fn.updateNodeContent;
-			idea = {id: 1, title: 'zeka'};
+			idea = {id: 'foo.1', title: 'zeka'};
 		});
 		afterEach(function () {
 			if (newElement) {
@@ -1013,29 +1070,42 @@ describe('MAPJS.DOMRender', function () {
 				});
 			});
 			it('looks up a DOM object with the matching node ID and if the node cache mark matches, returns the DOM width without re-applying content', function () {
-				newElement = jQuery('<div>').data({width: 111, height: 222}).attr('id', 'node_1').appendTo('body');
-				MAPJS.DOMRender.addNodeCacheMark(newElement, idea);
+				newElement = jQuery('<div>').data({width: 111, height: 222}).attr('id', 'node_foo_1').appendTo('body');
+				newElement.addNodeCacheMark(idea);
 				expect(MAPJS.DOMRender.dimensionProvider(idea)).toEqual({width: 111, height: 222});
 				expect(jQuery.fn.updateNodeContent).not.toHaveBeenCalled();
 			});
 			it('ignores DOM objects where the cache mark does not match', function () {
-				newElement = jQuery('<div>').data({width: 111, height: 222}).attr('id', 'node_1').appendTo('body');
-				MAPJS.DOMRender.addNodeCacheMark(newElement, idea);
+				newElement = jQuery('<div>').data({width: 111, height: 222}).attr('id', 'node_foo_1').appendTo('body');
+				newElement.addNodeCacheMark(idea);
 				expect(MAPJS.DOMRender.dimensionProvider(_.extend(idea, {title: 'not zeka'}))).toEqual({width: 654, height: 786});
 				expect(jQuery.fn.updateNodeContent).toHaveBeenCalled();
-
+			});
+			it('passes the level as an override when finding the cache mark', function () {
+				newElement = jQuery('<div>').data({width: 111, height: 222}).attr('id', 'node_foo_1').appendTo('body');
+				idea.level = 5;
+				newElement.addNodeCacheMark(idea);
+				idea.level = undefined;
+				expect(MAPJS.DOMRender.dimensionProvider(idea, 5)).toEqual({width: 111, height: 222});
+				expect(jQuery.fn.updateNodeContent).not.toHaveBeenCalled();
 			});
 		});
 	});
 	describe('viewController', function () {
 		var stage,
 			viewPort,
-			mapModel;
+			mapModel,
+			imageInsertController,
+			resourceTranslator;
 		beforeEach(function () {
-			mapModel = observable(jasmine.createSpyObj('mapModel', ['clickNode', 'dropNode', 'openAttachment', 'toggleCollapse', 'undo', 'editNode', 'isEditingEnabled', 'editNode', 'setInputEnabled', 'updateTitle']));
+			mapModel = observable(jasmine.createSpyObj('mapModel', ['getReorderBoundary', 'dropImage', 'clickNode', 'positionNodeAt', 'dropNode', 'openAttachment', 'toggleCollapse', 'undo', 'editNode', 'isEditingEnabled', 'editNode', 'setInputEnabled', 'getInputEnabled', 'updateTitle', 'getNodeIdAtPosition', 'selectNode', 'getCurrentlySelectedIdeaId', 'requestContextMenu']));
+			mapModel.getInputEnabled.and.returnValue(true);
+			mapModel.isEditingEnabled.and.returnValue(true);
+			imageInsertController = observable({});
 			viewPort = jQuery('<div>').appendTo('body');
 			stage = jQuery('<div>').css('overflow', 'scroll').appendTo(viewPort);
-			MAPJS.DOMRender.viewController(mapModel, stage);
+			resourceTranslator = jasmine.createSpy('resourceTranslator');
+			MAPJS.DOMRender.viewController(mapModel, stage, false, imageInsertController, resourceTranslator);
 			spyOn(jQuery.fn, 'queueFadeIn').and.callThrough();
 		});
 		afterEach(function () {
@@ -1047,6 +1117,7 @@ describe('MAPJS.DOMRender', function () {
 				beforeEach(function () {
 					node = {id: '11.12', title: 'zeka', x: 10, y: 20, width: 30, height: 40};
 					spyOn(jQuery.fn, 'updateNodeContent').and.callFake(function () {
+						this.data(node);
 						this.css('height', 40);
 						this.css('width', 30);
 						return this;
@@ -1056,7 +1127,7 @@ describe('MAPJS.DOMRender', function () {
 					stage.data('scale', 3);
 
 					mapModel.dispatchEvent('nodeCreated', node);
-					underTest = stage.children().first();
+					underTest = stage.children('[data-mapjs-role=node]').first();
 				});
 				it('sanitises the ID by replacing dots with underscores', function () {
 					expect(underTest.attr('id')).toBe('node_11_12');
@@ -1071,27 +1142,11 @@ describe('MAPJS.DOMRender', function () {
 					expect(underTest.css('display')).toBe('block');
 					expect(underTest.css('position')).toBe('absolute');
 				});
-				it('sets the x, y, width, height properties according to node values', function () {
-					expect(underTest.data('x')).toBe(10);
-					expect(underTest.data('y')).toBe(20);
-					expect(underTest.data('width')).toBe(30);
-					expect(underTest.data('height')).toBe(40);
-				});
-				it('rounds x, y, width and height to improve performance', function () {
-					node = {id: '12', title: 'zeka', x: 10.02, y: 19.99, width: 30.2, height: 40.3};
-					mapModel.dispatchEvent('nodeCreated', node);
-					underTest = stage.children('#node_12');
-					expect(underTest.data('x')).toBe(10);
-					expect(underTest.data('y')).toBe(20);
-					expect(underTest.data('width')).toBe(30);
-					expect(underTest.data('height')).toBe(40);
-				});
-
 				it('assigns a mapjs-node css class', function () {
 					expect(underTest.hasClass('mapjs-node')).toBeTruthy();
 				});
 				it('updates the node content', function () {
-					expect(jQuery.fn.updateNodeContent).toHaveBeenCalledWith(node);
+					expect(jQuery.fn.updateNodeContent).toHaveBeenCalledWith(node, resourceTranslator);
 					expect(jQuery.fn.updateNodeContent).toHaveBeenCalledOnJQueryObject(underTest);
 					expect(jQuery.fn.updateNodeContent.calls.count()).toBe(1);
 				});
@@ -1103,14 +1158,28 @@ describe('MAPJS.DOMRender', function () {
 					underTest.trigger(event);
 					expect(mapModel.clickNode).toHaveBeenCalledWith('11.12', event);
 				});
-				it('forwards the contextMenu event by dispatching it for the mapModel', function () {
-					var spy = jasmine.createSpy();
-					var event = jQuery.Event('contextmenu', {pageX: 111, pageY: 112});
-					mapModel.addEventListener('contextMenuRequested', spy);
+				it('does not forward right-click events to the mapModel clickNode to avoid double processing', function () {
+					var event = jQuery.Event('tap', {gesture: { stopPropagation: jasmine.createSpy(), srcEvent: { button: 1}}});
 					underTest.trigger(event);
-					expect(spy).toHaveBeenCalledWith('11.12', 111, 112);
+					expect(mapModel.clickNode).not.toHaveBeenCalled();
+				});
+				it('selects the node and forwards the contextMenu event by dispatching it for the mapModel', function () {
+					mapModel.requestContextMenu.and.returnValue(true);
+					var event = jQuery.Event('contextmenu', {pageX: 111, pageY: 112});
+					underTest.trigger(event);
+					expect(mapModel.selectNode).toHaveBeenCalledWith('11.12');
+					expect(mapModel.requestContextMenu).toHaveBeenCalledWith(111, 112);
 					expect(event.isDefaultPrevented()).toBeTruthy();
-
+					expect(event.result).toBe(false);
+				});
+				it('does not prevent the default on context menu if mapModel returns false from the context menu request', function () {
+					mapModel.requestContextMenu.and.returnValue(false);
+					var event = jQuery.Event('contextmenu', {pageX: 111, pageY: 112});
+					underTest.trigger(event);
+					expect(mapModel.selectNode).toHaveBeenCalledWith('11.12');
+					expect(mapModel.requestContextMenu).toHaveBeenCalledWith(111, 112);
+					expect(event.isDefaultPrevented()).toBeFalsy();
+					expect(event.result).toBeUndefined();
 				});
 				it('connects the node double-tap event to toggleCollapse if editing is disabled', function () {
 					mapModel.isEditingEnabled.and.returnValue(false);
@@ -1131,9 +1200,6 @@ describe('MAPJS.DOMRender', function () {
 				});
 				it('fixes the width of the node so it does not condense on movements', function () {
 					expect(underTest.css('min-width')).toBe('30px');
-				});
-				it('tags the node with a cache mark', function () {
-					expect(underTest.data('nodeCacheMark')).toEqual({ level: undefined, title : 'zeka', icon : undefined, collapsed : undefined });
 				});
 				it('sets the screen coordinates according to data attributes, ignoring stage zoom and transformations', function () {
 					expect(underTest.css('top')).toBe('20px');
@@ -1178,46 +1244,301 @@ describe('MAPJS.DOMRender', function () {
 					expect(stage.data('offsetY')).toBe(100);
 					expect(jQuery.fn.updateStage).not.toHaveBeenCalled();
 				});
-				describe('drag and drop features', function () {
-					var underTest;
-					beforeEach(function () {
-						mapModel.dispatchEvent('nodeCreated', {x: 20, y: -120, width: 20, height: 10, title: 'zeka', id: 1});
-						underTest = stage.children().first();
-						underTest.trigger('mm:start-dragging');
-					});
-					it('assigns a dragging class when the node is being dragged', function () {
+			});
+			describe('holding node action', function () {
+				var underTest, holdEvent;
+				beforeEach(function () {
+					holdEvent = jQuery.Event('hold',
+						{
+							gesture: {
+								center: {pageX: 70, pageY: 50},
+								preventDefault: jasmine.createSpy(),
+								stopPropagation: jasmine.createSpy(),
+								srcEvent: 'the real event'
+							}
+						});
+				});
+				it('is not applicable to non touch devices', function () {
+					mapModel.dispatchEvent('nodeCreated', {x: 20, y: -120, width: 20, height: 10, title: 'zeka', id: 1});
+					underTest = stage.children('[data-mapjs-role=node]').first();
+					spyOn(mapModel, 'dispatchEvent').and.callThrough();
+
+					underTest.trigger(holdEvent);
+
+					expect(mapModel.dispatchEvent).not.toHaveBeenCalled();
+					expect(mapModel.clickNode).not.toHaveBeenCalled();
+				});
+				it('on touch devices sends clickNode message to map model and requests the context menu to be shown', function () {
+					stage.remove();
+					stage = jQuery('<div>').css('overflow', 'scroll').appendTo(viewPort);
+					MAPJS.DOMRender.viewController(mapModel, stage, true);
+					mapModel.dispatchEvent('nodeCreated', {x: 20, y: -120, width: 20, height: 10, title: 'zeka', id: 1});
+					underTest = stage.children('[data-mapjs-role=node]').first();
+
+					underTest.trigger(holdEvent);
+
+					expect(mapModel.clickNode).toHaveBeenCalledWith(1, 'the real event');
+					expect(mapModel.requestContextMenu).toHaveBeenCalledWith(70, 50);
+				});
+
+			});
+			describe('drag and drop features', function () {
+				var underTest, noShift, withShift, outsideViewport, reorderBoundary;
+				beforeEach(function () {
+					mapModel.dispatchEvent('nodeCreated', {x: 20, y: -120, width: 20, level: 2, height: 10, title: 'zeka', id: 1});
+					mapModel.dispatchEvent('nodeCreated', {x: 20, y: -120, width: 20, level: 1, height: 10, title: 'zeka', id: 2});
+					mapModel.dispatchEvent('nodeCreated', {x: 20, y: -120, width: 20, level: 2, height: 10, title: 'zeka', id: 3});
+					jQuery('#node_3').addClass('droppable');
+					underTest = jQuery('#node_1');
+					reorderBoundary = [{
+						edge: 'left',
+						maxY: 130,
+						minY: 120,
+						x: 110,
+						margin: 10
+					}];
+					mapModel.getReorderBoundary.and.returnValue(reorderBoundary);
+					underTest.trigger('mm:start-dragging');
+					viewPort.css({'width': '1000px', 'height': '500px', 'overflow': 'scroll', 'top': '10px', 'left': '10px', 'position': 'absolute'});
+					stage.data({offsetX: 200, offsetY: 100, width: 3000, height: 1500, scale: 2}).updateStage();
+
+					viewPort.scrollLeft(20);
+					viewPort.scrollTop(10);
+					noShift = {gesture: {center: {pageX: 70, pageY: 50}, deltaX: -30, deltaY: -20}, finalPosition: {left: 614, top: 446} };
+					withShift = {gesture: {srcEvent: {shiftKey: true}, center: {pageX: 70, pageY: 50}}, finalPosition: {left: 614, top: 446}};
+					outsideViewport = {gesture: {srcEvent: {shiftKey: true}, center: {pageX: 1100, pageY: 446}}};
+				});
+				describe('when dragging', function () {
+					it('assigns a dragging class', function () {
 						expect(underTest.hasClass('dragging')).toBeTruthy();
 					});
-					it('removes the dragging class when dragging is cancelled', function () {
+
+					it('clears the current droppable if drag event does not have a scrieen position', function () {
+						underTest.trigger('mm:drag');
+						expect(jQuery('#node_3').hasClass('droppable')).toBeFalsy();
+					});
+					it('works out the stage position from the page drop position and calls mapModel.getNodeIdAtPosition', function () {
+						underTest.trigger(jQuery.Event('mm:drag', noShift));
+						expect(mapModel.getNodeIdAtPosition).toHaveBeenCalledWith(-160, -75);
+					});
+					describe('when over a node', function () {
+						beforeEach(function () {
+							mapModel.getNodeIdAtPosition.and.returnValue(2);
+						});
+						it('sets draggable class on the node', function () {
+							underTest.trigger(jQuery.Event('mm:drag', noShift));
+							expect(jQuery('#node_2').hasClass('droppable')).toBeTruthy();
+							expect(jQuery('#node_3').hasClass('droppable')).toBeFalsy();
+						});
+						it('hides reorder bounds even when the drag object is within reorder bounds', function () {
+							noShift.currentPosition = noShift.finalPosition;
+							underTest.trigger(jQuery.Event('mm:drag', noShift));
+							expect(stage.find('[data-mapjs-role=reorder-bounds]').length).toBeTruthy();
+							expect(stage.find('[data-mapjs-role=reorder-bounds]').css('display')).toBe('none');
+						});
+					});
+					describe('when over the background', function () {
+						beforeEach(function () {
+							mapModel.getNodeIdAtPosition.and.returnValue(false);
+						});
+						it('removes the draggable class from all nodes', function () {
+							underTest.trigger(jQuery.Event('mm:drag', noShift));
+							expect(jQuery('#node_2').hasClass('droppable')).toBeFalsy();
+							expect(jQuery('#node_3').hasClass('droppable')).toBeFalsy();
+						});
+						it('hides the reorder boundary if current position is above the bounds', function () {
+							noShift.currentPosition = noShift.finalPosition;
+							noShift.currentPosition.top -= 30;
+							underTest.trigger(jQuery.Event('mm:drag', noShift));
+							expect(stage.find('[data-mapjs-role=reorder-bounds]').length).toBeTruthy();
+							expect(stage.find('[data-mapjs-role=reorder-bounds]').css('display')).toBe('none');
+						});
+						it('shows the reorder boundary if current position is within the bounds', function () {
+							noShift.currentPosition = noShift.finalPosition;
+							underTest.trigger(jQuery.Event('mm:drag', noShift));
+							expect(stage.find('[data-mapjs-role=reorder-bounds]').length).toBeTruthy();
+							expect(stage.find('[data-mapjs-role=reorder-bounds]').css('display')).not.toBe('none');
+						});
+						it('hides the reorder boundary if shift is pressed', function () {
+							withShift.currentPosition = noShift.finalPosition;
+							underTest.trigger(jQuery.Event('mm:drag', withShift));
+							expect(stage.find('[data-mapjs-role=reorder-bounds]').length).toBeTruthy();
+							expect(stage.find('[data-mapjs-role=reorder-bounds]').css('display')).toBe('none');
+						});
+					});
+					describe('when over itself', function () {
+						beforeEach(function () {
+							mapModel.getNodeIdAtPosition.and.returnValue(1);
+						});
+						it('removes the draggable class from all nodes', function () {
+							underTest.trigger(jQuery.Event('mm:drag', noShift));
+							expect(jQuery('#node_1').hasClass('droppable')).toBeFalsy();
+						});
+					});
+				});
+				describe('when dragging is cancelled', function () {
+					beforeEach(function () {
+						stage.find('[data-mapjs-role=reorder-bounds]').show();
 						underTest.trigger('mm:cancel-dragging');
+					});
+					it('removes the dragging class', function () {
 						expect(underTest.hasClass('dragging')).toBeFalsy();
 					});
-					it('removes the dragging class when dragging is stopped', function () {
+					it('removes the dropppable class', function () {
+						expect(jQuery('#node_3').hasClass('droppable')).toBeFalsy();
+					});
+					it('hides reorder bounds', function () {
+						expect(stage.find('[data-mapjs-role=reorder-bounds]').css('display')).toBe('none');
+					});
+				});
+				describe('when dragging stops', function () {
+					it('hides reorder bounds', function () {
+						stage.find('[data-mapjs-role=reorder-bounds]').show();
+						underTest.trigger('mm:stop-dragging');
+						expect(stage.find('[data-mapjs-role=reorder-bounds]').css('display')).toBe('none');
+					});
+					it('removes the dragging class', function () {
 						underTest.trigger('mm:stop-dragging');
 						expect(underTest.hasClass('dragging')).toBeFalsy();
 					});
-					it('when dragging stops, works out the stage drop position from the page drop position and calls mapModel.dropNode with the stage drop position', function () {
-
-						viewPort.css({'width': '100px', 'height': '50px', 'overflow': 'scroll', 'top': '10px', 'left': '10px', 'position': 'absolute'});
-						stage.data({offsetX: 200, offsetY: 100, width: 300, height: 150, scale: 2}).updateStage();
-
-						viewPort.scrollLeft(20);
-						viewPort.scrollTop(10);
-						underTest.trigger(jQuery.Event('mm:stop-dragging', {gesture: {center: {pageX: 70, pageY: 50}}}));
-						expect(mapModel.dropNode).toHaveBeenCalledWith(1, -160, -75, false);
+					it('removes the droppable class', function () {
+						underTest.trigger('mm:stop-dragging');
+						expect(jQuery('#node_3').hasClass('droppable')).toBeFalsy();
 					});
-					it('passes the shift key state when dropped', function () {
-						viewPort.css({'width': '100px', 'height': '50px', 'overflow': 'scroll', 'top': '10px', 'left': '10px', 'position': 'absolute'});
-						stage.data({offsetX: 200, offsetY: 100, width: 300, height: 150, scale: 2}).updateStage();
 
-						viewPort.scrollLeft(20);
-						viewPort.scrollTop(10);
-						underTest.trigger(jQuery.Event('mm:stop-dragging', {gesture: {srcEvent: {shiftKey: true}, center: {pageX: 70, pageY: 50}}}));
-						expect(mapModel.dropNode).toHaveBeenCalledWith(1, -160, -75, true);
+					it('calls getNodeIdAtPosition to work out if it got dropped on a node', function () {
+						underTest.trigger(jQuery.Event('mm:stop-dragging', noShift));
+						expect(mapModel.getNodeIdAtPosition).toHaveBeenCalledWith(-160, -75);
+					});
+					describe('when dropped on a node', function () {
+						beforeEach(function () {
+							mapModel.getNodeIdAtPosition.and.returnValue(2);
+						});
+						it('calls dropNode and passes the dropped node ID', function () {
+							underTest.trigger(jQuery.Event('mm:stop-dragging', noShift));
+							expect(mapModel.dropNode).toHaveBeenCalledWith(1, 2, false);
+						});
+						it('passes shiftKey status', function () {
+							underTest.trigger(jQuery.Event('mm:stop-dragging', withShift));
+							expect(mapModel.dropNode).toHaveBeenCalledWith(1, 2, true);
+						});
+						it('does not set event result to false by default', function () {
+							var e = jQuery.Event('mm:stop-dragging', withShift);
+							underTest.trigger(e);
+							expect(e.result).toBeUndefined();
+						});
+						it('sets the result to false if dropNode returns false', function () {
+							mapModel.dropNode.and.returnValue(false);
+							var e = jQuery.Event('mm:stop-dragging', withShift);
+							underTest.trigger(e);
+							expect(e.result === false).toBeTruthy();
+						});
+					});
+					describe('when level > 1 dropped on background', function () {
+						beforeEach(function () {
+							mapModel.getNodeIdAtPosition.and.returnValue(false);
+						});
+						it('calls positionNode and passes the current (DOM) top and left position', function () {
+							underTest.trigger(jQuery.Event('mm:stop-dragging', noShift));
+							expect(mapModel.positionNodeAt).toHaveBeenCalledWith(1, 112, 123, false);
+						});
+						describe('reorder or manual position check', function () {
+							it('does not position manually inside reorder bounds', function () {
+								underTest.trigger(jQuery.Event('mm:stop-dragging', noShift));
+								expect(mapModel.positionNodeAt.calls.mostRecent().args[3]).toBeFalsy();
+							});
+							it('forces manual position right of reorder bounds', function () {
+								noShift.finalPosition.left += 60;
+								underTest.trigger(jQuery.Event('mm:stop-dragging', noShift));
+								expect(mapModel.positionNodeAt.calls.mostRecent().args[3]).toBeTruthy();
+							});
+							it('forces manual position left of reorder bounds', function () {
+								noShift.finalPosition.left -= 60;
+								underTest.trigger(jQuery.Event('mm:stop-dragging', noShift));
+								expect(mapModel.positionNodeAt.calls.mostRecent().args[3]).toBeTruthy();
+							});
+							it('forces manual position top of reorder bounds', function () {
+								noShift.finalPosition.top -= 30;
+								underTest.trigger(jQuery.Event('mm:stop-dragging', noShift));
+								expect(mapModel.positionNodeAt.calls.mostRecent().args[3]).toBeTruthy();
+							});
+							it('forces manual position below of reorder bounds', function () {
+								noShift.finalPosition.top += 30;
+								underTest.trigger(jQuery.Event('mm:stop-dragging', noShift));
+								expect(mapModel.positionNodeAt.calls.mostRecent().args[3]).toBeTruthy();
+							});
+							it('forces manual positioning if shift is pressed even within bounds', function () {
+								underTest.trigger(jQuery.Event('mm:stop-dragging', withShift));
+								expect(mapModel.positionNodeAt.calls.mostRecent().args[3]).toBeTruthy();
+							});
+						});
+						it('does not set event result to false by default', function () {
+							var e = jQuery.Event('mm:stop-dragging', withShift);
+							underTest.trigger(e);
+							expect(e.result).toBeUndefined();
+						});
+						it('sets the result to false if dropNode returns false', function () {
+							mapModel.positionNodeAt.and.returnValue(false);
+							var e = jQuery.Event('mm:stop-dragging', withShift);
+							underTest.trigger(e);
+							expect(e.result === false).toBeTruthy();
+						});
+					});
+					it('does not position node and returns false when when level = 1 dropped on a background', function () {
+						underTest.trigger(jQuery.Event('mm:stop-dragging', noShift));
+						mapModel.positionNodeAt.calls.reset();
 
+						underTest = jQuery('#node_2');
+						underTest.trigger('mm:start-dragging');
+
+						var e = jQuery.Event('mm:stop-dragging', noShift);
+						expect(mapModel.positionNodeAt).not.toHaveBeenCalled();
+						underTest.trigger(e);
+						expect(e.result === true).toBeTruthy();
+					});
+					it('scrolls the viewport when level = 1 dropped on a background', function () {
+						underTest.trigger(jQuery.Event('mm:stop-dragging', noShift));
+						underTest = jQuery('#node_2');
+						underTest.trigger('mm:start-dragging');
+						var e = jQuery.Event('mm:stop-dragging', noShift);
+						underTest.trigger(e);
+						viewPort.finish();
+						expect(viewPort.scrollLeft()).toBe(80);
+						expect(viewPort.scrollTop()).toBe(50);
+
+					});
+					it('does not position node and does not returns false when dropped outside viewport', function () {
+						mapModel.getNodeIdAtPosition.and.returnValue(false);
+						var e = jQuery.Event('mm:stop-dragging', outsideViewport);
+						underTest.trigger(e);
+						expect(mapModel.positionNodeAt).not.toHaveBeenCalled();
+						expect(e.result).toBeUndefined();
+					});
+					describe('when dropped on itself', function () {
+						beforeEach(function () {
+							mapModel.getNodeIdAtPosition.and.returnValue(1);
+							underTest.css({position: 'absolute', top: '123px', left: '112px'});
+						});
+						it('triggers automatic positioning if within reorder bounds', function () {
+							underTest.trigger(jQuery.Event('mm:stop-dragging', noShift));
+							expect(mapModel.positionNodeAt).toHaveBeenCalledWith(1, 112, 123, false);
+							expect(mapModel.dropNode).not.toHaveBeenCalled();
+						});
+						it('triggers manual positioning outside of reorder bounds', function () {
+							noShift.finalPosition.left += 60;
+							underTest.trigger(jQuery.Event('mm:stop-dragging', noShift));
+							expect(mapModel.positionNodeAt.calls.mostRecent().args[3]).toBeTruthy();
+							expect(mapModel.dropNode).not.toHaveBeenCalled();
+						});
+						it('triggers manual positioning if shift is pressed', function () {
+							underTest.trigger(jQuery.Event('mm:stop-dragging', withShift));
+							expect(mapModel.positionNodeAt).toHaveBeenCalledWith(1, 112, 123, true);
+							expect(mapModel.dropNode).not.toHaveBeenCalled();
+						});
 					});
 				});
 			});
+
 		});
 		describe('activatedNodesChanged', function () {
 			var nodes;
@@ -1261,6 +1582,7 @@ describe('MAPJS.DOMRender', function () {
 				spyOn(jQuery.fn, 'updateNodeContent').and.callFake(function () {
 					this.css('height', 40);
 					this.css('width', 30);
+					this.data(node);
 					return this;
 				});
 				viewPort.css({'width': '200', 'height': '100', 'overflow': 'scroll'});
@@ -1276,7 +1598,7 @@ describe('MAPJS.DOMRender', function () {
 				viewPort.scrollTop(80);
 
 				mapModel.dispatchEvent('nodeCreated', node);
-				underTest = stage.children().first();
+				underTest = stage.children('[data-mapjs-role=node]').first();
 				spyOn(jQuery.fn, 'focus').and.callThrough();
 				spyOn(jQuery.fn, 'animate');
 			});
@@ -1302,15 +1624,13 @@ describe('MAPJS.DOMRender', function () {
 					beforeEach(function ()  {
 						viewPort.scrollLeft(5);
 						viewPort.scrollTop(3);
+						mapModel.getCurrentlySelectedIdeaId.and.returnValue('11.12');
 						mapModel.dispatchEvent('nodeSelectionChanged', '11.12', true);
 					});
 					it('adds the selected class immediately', function () {
 						expect(underTest.hasClass('selected')).toBeTruthy();
 					});
-					it('requests focus for the node immediately', function () {
-						expect(jQuery.fn.focus.calls.count()).toBe(1);
-						expect(jQuery.fn.focus).toHaveBeenCalledOnJQueryObject(underTest);
-					});
+
 					it('does not animate', function () {
 						expect(jQuery.fn.animate).not.toHaveBeenCalled();
 					});
@@ -1333,31 +1653,62 @@ describe('MAPJS.DOMRender', function () {
 						beforeEach(function ()  {
 							underTest.data('x', nodeX);
 							underTest.data('y', nodeY);
+							mapModel.getCurrentlySelectedIdeaId.and.returnValue('11.12');
 							mapModel.dispatchEvent('nodeSelectionChanged', '11.12', true);
 						});
-						it('does not immediately adds the selected class or focus', function () {
-							expect(underTest.hasClass('selected')).toBeFalsy();
-							expect(jQuery.fn.focus).not.toHaveBeenCalled();
+						it('immediately adds the selected class', function () {
+							expect(underTest.hasClass('selected')).toBeTruthy();
 						});
 						it('animates scroll movements to show selected node', function () {
 							expect(jQuery.fn.animate).toHaveBeenCalledOnJQueryObject(viewPort);
 							expect(jQuery.fn.animate.calls.first().args[0]).toEqual(expectedAnimation);
 						});
-						it('sets the selected class and asks for focus once the animation completes', function () {
-							jQuery.fn.animate.calls.first().args[1].complete();
-							expect(underTest.hasClass('selected')).toBeTruthy();
-							expect(jQuery.fn.focus).toHaveBeenCalledOnJQueryObject(underTest);
-						});
 					});
 				});
 			});
 		});
+		describe('nodeVisibilityRequested', function () {
+			var underTest;
+			beforeEach(function () {
+				var node = {id: '11.12', title: 'zeka', x: -80, y: -35, width: 30, height: 20};
+				spyOn(jQuery.fn, 'updateNodeContent').and.callFake(function () {
+					this.css('height', 40);
+					this.css('width', 30);
+					this.data(node);
+					return this;
+				});
+				viewPort.css({'width': '200', 'height': '100', 'overflow': 'scroll'});
+				stage.data({
+					'offsetX': 100,
+					'offsetY': 50,
+					'scale': 2,
+					'width': 500,
+					'height': 500
+				});
+				stage.updateStage();
+				viewPort.scrollLeft(180);
+				viewPort.scrollTop(80);
+				mapModel.dispatchEvent('nodeCreated', node);
+				underTest = stage.children('[data-mapjs-role=node]').first();
+				spyOn(jQuery.fn, 'animate').and.callThrough();
+			});
+			it('should animate scroll movement to show the node', function () {
+				underTest.data('x', -80);
+				underTest.data('y', -20);
+				mapModel.getCurrentlySelectedIdeaId.and.returnValue('11.12');
+				mapModel.dispatchEvent('nodeVisibilityRequested', '11.12');
+				expect(jQuery.fn.animate).toHaveBeenCalledOnJQueryObject(viewPort);
+				expect(jQuery.fn.animate.calls.first().args[0]).toEqual({scrollLeft: 30, scrollTop: 50});
+				expect(viewPort.queue()).toEqual([]);
+			});
+		});
+
 		describe('nodeRemoved', function () {
 			var underTest, node;
 			beforeEach(function () {
 				node = {id: '11', title: 'zeka', x: -80, y: -35, width: 30, height: 20};
 				mapModel.dispatchEvent('nodeCreated', node);
-				underTest = stage.children().first();
+				underTest = stage.children('[data-mapjs-role=node]').first();
 				spyOn(jQuery.fn, 'queueFadeOut');
 			});
 			it('animates a fade-out', function () {
@@ -1371,7 +1722,7 @@ describe('MAPJS.DOMRender', function () {
 				node = {id: 1, title: 'zeka', x: 0, y: 0, width: 20, height: 10};
 				stage.data({offsetX: 200, offsetY: 100, width: 300, height: 150});
 				mapModel.dispatchEvent('nodeCreated', node);
-				underTest = stage.children().first();
+				underTest = stage.children('[data-mapjs-role=node]').first();
 
 				spyOn(jQuery.fn, 'updateStage').and.callThrough();
 			});
@@ -1387,10 +1738,10 @@ describe('MAPJS.DOMRender', function () {
 			});
 			describe('expands the stage if needed - using a margin', function () {
 				beforeEach(function () {
-					MAPJS.DOMRender.stageMargin = 10;
+					MAPJS.DOMRender.stageMargin = {top: 10, left: 11, bottom: 12, right: 13};
 				});
 				afterEach(function () {
-					MAPJS.DOMRender.stageMargin = 0;
+					MAPJS.DOMRender.stageMargin = false;
 				});
 				it('grows the stage from the top if y would be negative', function () {
 					mapModel.dispatchEvent('nodeMoved', {x: 20, y: -120, width: 20, height: 10, title: 'zeka', id: 1});
@@ -1400,19 +1751,19 @@ describe('MAPJS.DOMRender', function () {
 				});
 				it('grows the stage from the left if x would be negative', function () {
 					mapModel.dispatchEvent('nodeMoved', {x: -230, y: 20, width: 20, height: 10, title: 'zeka', id: 1});
-					expect(stage.data('offsetX')).toBe(240);
-					expect(stage.data('width')).toBe(340);
+					expect(stage.data('offsetX')).toBe(241);
+					expect(stage.data('width')).toBe(341);
 					expect(jQuery.fn.updateStage).toHaveBeenCalledOnJQueryObject(stage);
 				});
 				it('expands the stage min width without touching the offset if the total width would be over the current boundary', function () {
 					mapModel.dispatchEvent('nodeMoved', {x: 90, y: 20, width: 20, height: 10, title: 'zeka', id: 1});
-					expect(stage.data('width')).toBe(320);
+					expect(stage.data('width')).toBe(323);
 					expect(stage.data('offsetX')).toBe(200);
 					expect(jQuery.fn.updateStage).toHaveBeenCalledOnJQueryObject(stage);
 				});
 				it('expands the stage min height without touching the offset if the total height would be over the current boundary', function () {
 					mapModel.dispatchEvent('nodeMoved', {x: 20, y: 45, width: 20, height: 10, title: 'zeka', id: 1});
-					expect(stage.data('height')).toBe(165);
+					expect(stage.data('height')).toBe(167);
 					expect(stage.data('offsetY')).toBe(100);
 					expect(jQuery.fn.updateStage).toHaveBeenCalledOnJQueryObject(stage);
 				});
@@ -1504,17 +1855,17 @@ describe('MAPJS.DOMRender', function () {
 					});
 			});
 		});
-		_.each(['nodeTitleChanged', 'nodeAttrChanged'], function (eventType) {
+		_.each(['nodeTitleChanged', 'nodeAttrChanged', 'nodeLabelChanged'], function (eventType) {
 			it('updates node content on ' + eventType, function () {
 				var underTest, node;
 				node = {id: '11', title: 'zeka', x: -80, y: -35, width: 30, height: 20};
 				mapModel.dispatchEvent('nodeCreated', node);
-				underTest = stage.children().first();
+				underTest = stage.children('[data-mapjs-role=node]').first();
 				spyOn(jQuery.fn, 'updateNodeContent');
 
 				mapModel.dispatchEvent(eventType, node);
 				expect(jQuery.fn.updateNodeContent).toHaveBeenCalledOnJQueryObject(underTest);
-
+				expect(jQuery.fn.updateNodeContent).toHaveBeenCalledWith(node, resourceTranslator);
 			});
 		});
 		describe('nodeEditRequested', function () {
@@ -1522,16 +1873,41 @@ describe('MAPJS.DOMRender', function () {
 			beforeEach(function () {
 				node = {id: '11', title: 'zeka', x: -80, y: -35, width: 30, height: 20};
 				mapModel.dispatchEvent('nodeCreated', node);
-				underTest = stage.children().first();
+				underTest = stage.children('[data-mapjs-role=node]').first();
 				editDeferred = jQuery.Deferred();
 				spyOn(jQuery.fn, 'focus');
 				spyOn(jQuery.fn, 'finish');
 				spyOn(jQuery.fn, 'editNode').and.returnValue(editDeferred.promise());
 			});
+			describe('options', function () {
+				describe('inlineEditingDisabled', function () {
+					beforeEach(function () {
+						viewPort.remove();
+						spyOn(mapModel, 'addEventListener');
+						viewPort = jQuery('<div>').appendTo('body');
+						stage = jQuery('<div>').css('overflow', 'scroll').appendTo(viewPort);
+						resourceTranslator = jasmine.createSpy('resourceTranslator');
+					});
+					it('should subscribe to mapModel nodeEditRequested event when no options supplied', function () {
+						MAPJS.DOMRender.viewController(mapModel, stage, false, imageInsertController, resourceTranslator);
+						expect(mapModel.addEventListener).toHaveBeenCalledWith('nodeEditRequested', jasmine.any(Function));
+					});
+					it('should subscribe to mapModel nodeEditRequested event when no options.inlineEditingDisabled is false', function () {
+						MAPJS.DOMRender.viewController(mapModel, stage, false, imageInsertController, resourceTranslator, {inlineEditingDisabled: false});
+						expect(mapModel.addEventListener).toHaveBeenCalledWith('nodeEditRequested', jasmine.any(Function));
+					});
+					it('should not subscribe to mapModel nodeEditRequested event when true', function () {
+						MAPJS.DOMRender.viewController(mapModel, stage, false, imageInsertController, resourceTranslator, {inlineEditingDisabled: true});
+						expect(mapModel.addEventListener).not.toHaveBeenCalledWith('nodeEditRequested', jasmine.any(Function));
+					});
+				});
+
+			});
 			describe('when editing an existing node', function () {
 				beforeEach(function () {
 					mapModel.dispatchEvent('nodeEditRequested', '11', false, false);
 				});
+
 				it('disables input on mapModel', function () {
 					expect(mapModel.setInputEnabled).toHaveBeenCalledWith(false);
 				});
@@ -1848,6 +2224,51 @@ describe('MAPJS.DOMRender', function () {
 				expect(stage.data('scale')).toBe(0.2);
 			});
 		});
+		describe('mapViewResetRequested', function () {
+			beforeEach(function () {
+				spyOn(jQuery.fn, 'updateStage').and.callThrough();
+				spyOn(jQuery.fn, 'updateConnector').and.callThrough();
+				spyOn(jQuery.fn, 'updateLink').and.callThrough();
+				viewPort.css({'width': '200', 'height': '100', 'overflow': 'scroll'});
+				stage.data({ 'offsetX': 100, 'offsetY': 50, 'scale': 1, 'width': 400, 'height': 300 }).updateStage();
+				viewPort.scrollLeft(10).scrollTop(10);
+				mapModel.dispatchEvent('nodeCreated', {id: '11.12', title: 'zeka2', x: 100, y: 50, width: 20, height: 10});
+				mapModel.dispatchEvent('nodeCreated', {id: '12.12', title: 'zeka3', x: 200, y: 150, width: 20, height: 10});
+				mapModel.dispatchEvent('nodeCreated', {id: '13.12', title: 'zeka3', x: 300, y: 250, width: 20, height: 10});
+				mapModel.dispatchEvent('connectorCreated', {from: '11.12', to: '12.12'});
+				mapModel.dispatchEvent('connectorCreated', {from: '12.12', to: '13.12'});
+				mapModel.dispatchEvent('linkCreated', {ideaIdFrom: '11.12', ideaIdTo: '13.12', attr: {style: {color: 'blue', lineStyle: 'solid', arrow: true}}});
+				jQuery.fn.updateStage.calls.reset();
+			});
+
+			it('resets stage scale', function () {
+				stage.data({scale: 2}).updateStage();
+				stage.updateStage.calls.reset();
+				mapModel.dispatchEvent('mapViewResetRequested');
+				expect(stage.data('scale')).toBe(1);
+				expect(jQuery.fn.updateStage).toHaveBeenCalledOnJQueryObject(stage);
+			});
+			it('resets stage data', function () {
+				stage.data({'scale': 1, 'height': 500, 'width': 1000, 'offsetX': 20, 'offsetY': 500}).updateStage();
+				mapModel.dispatchEvent('mapViewResetRequested');
+				expect(stage.data()).toEqual({'scale': 1, 'height': 310, 'width': 420, 'offsetX': 100, 'offsetY': 50});
+			});
+			it('should update Connectors', function () {
+				jQuery.fn.updateConnector.calls.reset();
+				mapModel.dispatchEvent('mapViewResetRequested');
+				expect(jQuery.fn.updateConnector).toHaveBeenCalledOnJQueryObject(jQuery('[data-mapjs-role=connector]'));
+			});
+			it('should update Links', function () {
+				jQuery.fn.updateLink.calls.reset();
+				mapModel.dispatchEvent('mapViewResetRequested');
+				expect(jQuery.fn.updateLink).toHaveBeenCalledOnJQueryObject(jQuery('[data-mapjs-role=link]'));
+			});
+			it('centers the view', function () {
+				mapModel.dispatchEvent('mapViewResetRequested');
+				expect(viewPort.scrollLeft()).toBe(0);
+				expect(viewPort.scrollTop()).toBe(0);
+			});
+		});
 		describe('nodeFocusRequested', function () {
 			beforeEach(function () {
 				spyOn(jQuery.fn, 'updateStage').and.callThrough();
@@ -1902,6 +2323,17 @@ describe('MAPJS.DOMRender', function () {
 				}
 			);
 
+		});
+		describe('image drag and drop', function () {
+			it('converts event coordinates to stage coordinates and delegates to mapModel.dropImage', function () {
+				viewPort.css({'width': '100px', 'height': '50px', 'overflow': 'scroll', 'top': '10px', 'left': '10px', 'position': 'absolute'});
+				stage.data({offsetX: 200, offsetY: 100, width: 300, height: 150, scale: 2}).updateStage();
+				viewPort.scrollLeft(20);
+				viewPort.scrollTop(10);
+				imageInsertController.dispatchEvent('imageInserted', 'http://url', 666, 777, {pageX: 70, pageY: 50});
+				expect(mapModel.dropImage).toHaveBeenCalledWith('http://url', 666, 777, -160, -75);
+				expect(resourceTranslator).not.toHaveBeenCalled();
+			});
 		});
 	});
 });

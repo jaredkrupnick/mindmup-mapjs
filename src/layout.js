@@ -1,9 +1,6 @@
 /*jslint nomen: true*/
 /*global _, Color, MAPJS*/
-MAPJS.defaultStyles = {
-	root: {background: '#22AAE0'},
-	nonRoot: {background: '#E0E0E0'}
-};
+MAPJS.defaultStyles = { };
 MAPJS.layoutLinks = function (idea, visibleNodes) {
 	'use strict';
 	var result = {};
@@ -330,6 +327,7 @@ MAPJS.calculateLayout = function (idea, dimensionProvider, margin) {
 	_.extend(negativeLayout.connectors, layout.connectors);
 	setDefaultStyles(negativeLayout.nodes);
 	negativeLayout.links = MAPJS.layoutLinks(idea, negativeLayout.nodes);
+	negativeLayout.rootNodeId = idea.id;
 	return negativeLayout;
 };
 

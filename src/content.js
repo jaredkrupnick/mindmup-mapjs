@@ -91,11 +91,16 @@ MAPJS.content = function (contentAggregate, sessionKey) {
 				});
 				return result;
 			};
-			contentIdea.traverse = function (iterator) {
-				iterator(contentIdea);
+			contentIdea.traverse = function (iterator, postOrder) {
+				if (!postOrder) {
+					iterator(contentIdea);
+				}
 				_.each(contentIdea.sortedSubIdeas(), function (subIdea) {
-					subIdea.traverse(iterator);
+					subIdea.traverse(iterator, postOrder);
 				});
+				if (postOrder) {
+					iterator(contentIdea);
+				}
 			};
 			return contentIdea;
 		},
@@ -226,7 +231,16 @@ MAPJS.content = function (contentAggregate, sessionKey) {
 			var dotIndex = String(id).indexOf('.');
 			return dotIndex > 0 && id.substr(dotIndex + 1);
 		},
-		commandProcessors = {};
+		commandProcessors = {},
+		configuration = {},
+		uniqueResourcePostfix = '/xxxxxxxx-yxxx-yxxx-yxxx-xxxxxxxxxxxx/'.replace(/[xy]/g, function (c) {
+			/*jshint bitwise: false*/
+			var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r&0x3|0x8);
+			return v.toString(16);
+		}) + (sessionKey || '');
+	contentAggregate.setConfiguration = function (config) {
+		configuration = config || {};
+	};
 	contentAggregate.getSessionKey = function () {
 		return sessionKey;
 	};
@@ -392,7 +406,11 @@ MAPJS.content = function (contentAggregate, sessionKey) {
 	commandProcessors.paste = function (originSession, parentIdeaId, jsonToPaste, initialId) {
 		var pasteParent = (parentIdeaId == contentAggregate.id) ?  contentAggregate : contentAggregate.findSubIdeaById(parentIdeaId),
 			cleanUp = function (json) {
-				var result =  _.omit(json, 'ideas', 'id'), index = 1, childKeys, sortedChildKeys;
+				var result =  _.omit(json, 'ideas', 'id', 'attr'), index = 1, childKeys, sortedChildKeys;
+				result.attr = _.omit(json.attr, configuration.nonClonedAttributes);
+				if (_.isEmpty(result.attr)) {
+					delete result.attr;
+				}
 				if (json.ideas) {
 					childKeys = _.groupBy(_.map(_.keys(json.ideas), parseFloat), function (key) { return key > 0; });
 					sortedChildKeys = _.sortBy(childKeys[true], Math.abs).concat(_.sortBy(childKeys[false], Math.abs));
@@ -854,6 +872,50 @@ MAPJS.content = function (contentAggregate, sessionKey) {
 			return true;
 		}
 		return false;
+	};
+	contentAggregate.storeResource = function (/*resourceBody, optionalKey*/) {
+		return contentAggregate.execCommand('storeResource', arguments);
+	};
+	commandProcessors.storeResource = function (originSession, resourceBody, optionalKey) {
+		if (!optionalKey && contentAggregate.resources) {
+			var existingId = _.find(_.keys(contentAggregate.resources), function (key) {
+				return contentAggregate.resources[key] === resourceBody;
+			});
+			if (existingId) {
+				return existingId;
+			}
+		}
+		var maxIdForSession = function () {
+				if (_.isEmpty(contentAggregate.resources)) {
+					return 0;
+				}
+				var toInt = function (string) {
+						return parseInt(string, 10);
+					},
+					keys = _.keys(contentAggregate.resources),
+					filteredKeys = sessionKey ? _.filter(keys, RegExp.prototype.test.bind(new RegExp('\\/' + sessionKey + '$'))) : keys,
+					intKeys = _.map(filteredKeys, toInt);
+				return _.isEmpty(intKeys) ? 0 : _.max(intKeys);
+			},
+			nextResourceId = function () {
+				var intId = maxIdForSession() + 1;
+				return intId + uniqueResourcePostfix;
+			},
+			id = optionalKey || nextResourceId();
+		contentAggregate.resources = contentAggregate.resources || {};
+		contentAggregate.resources[id] = resourceBody;
+		contentAggregate.dispatchEvent('resourceStored', resourceBody, id, originSession);
+		return id;
+	};
+	contentAggregate.getResource = function (id) {
+		return contentAggregate.resources && contentAggregate.resources[id];
+	};
+	contentAggregate.hasSiblings = function (id) {
+		if (id === contentAggregate.id) {
+			return false;
+		}
+		var parent = contentAggregate.findParent(id);
+		return parent && _.size(parent.ideas) > 1;
 	};
 	if (contentAggregate.formatVersion != 2) {
 		upgrade(contentAggregate);
