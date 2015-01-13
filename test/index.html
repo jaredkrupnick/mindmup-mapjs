@@ -5,12 +5,12 @@
 	</head>
 	<body>
 		<style>
-			#container {
+			.container {
 				background-color: #FFFFFF;
-
-				height: 100%;
-				width: 100%;
+				height: 90%;
+				width: 90%;
 				border: 1px dashed black;
+        overflow: scroll;
 			}
 		</style>
 
@@ -32,6 +32,7 @@
 		<input type="button" class="paste" value="paste"></input>
 		<input type="button" class="openAttachment" value="open attachment"></input>
 		<input type="button" class="toggleAddLinkMode" value="add link"></input>
+
 		Background: <input type="text" class='updateStyle' data-mm-target-property='background'></input>
     Frames: <span id="framerate"></span>
     Cycle: <span id="cyclerate"></span>
@@ -47,7 +48,19 @@
 			</select>
 			<button class="arrow">Arrow</button>
 		</div>
-		<div id="container"></div>
+    <hr/>
+    <button role="show" target="stage">Stage</button>
+    <button role="show" target="svg">SVG</button>
+    <button role="show" target="intermediate-img">Intermediate Image</button>
+    <button role="show" target="canvas">Canvas</button>
+    <button role="show" target="png">PNG</button>
+    <button role="convert">Generate PNG</button>
+    <hr/>    
+		<div id="container" tab="stage" class="container"></div>
+    <div tab="svg" class="container"></div>
+    <div tab="intermediate-img" class="container"></div>
+    <div tab="canvas" class="container"></div>
+    <div tab="png" class="container"></div>
 		<script type="text/javascript" src="../lib/jquery-2.0.2.min.js"></script>
 		<script src="../lib/jquery.hotkeys.js"></script>
 		<script src="../lib/hammer.min.js"></script>
@@ -68,6 +81,7 @@
 		<script type="text/javascript" src="../src/dom-map-view.js"></script>
 		<script type="text/javascript" src="../src/dom-map-widget.js"></script>
 		<script type="text/javascript" src="roy-map.js"></script>
+		<script type="text/javascript" src="svgutil.js"></script>
 		<script>
 			jQuery.fn.attachmentEditorWidget = function (mapModel) {
 				'use strict';
