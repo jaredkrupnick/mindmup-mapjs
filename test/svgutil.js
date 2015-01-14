@@ -76,14 +76,64 @@ $('[role=convert]').click(function () {
 			canvas.getContext('2d').drawImage(img, 0, 0);
 			return canvas;
 		},
-		svg = $('[data-mapjs-role=stage]').toSVG(),
+		toPixel = function (cssString, relativeTo) {
+			var value = parseInt(cssString, 10);
+			if (/[0-9]+%/.test(cssString)){
+				return relativeTo * value / 100;
+			}
+			return value;
+		},
+		paintNodeImages = function (stage, canvas) {
+			var result = jQuery.Deferred(),
+				promises = [],
+				ctx = canvas.getContext('2d'),
+				offset = {
+						x: stage.data('offsetX'),
+						y: stage.data('offsetY')
+				};
+			stage.find('.mapjs-node').each(function () {
+				var node = $(this),
+						data = node.data(),
+					  domStyle = window.getComputedStyle(this),
+						bgImage = domStyle.backgroundImage,
+						promise,
+						img;
+				if (/url\(/.test(bgImage)) { //todo:check for data url, not just url
+					img = new Image();
+					promise = jQuery.Deferred();
+					promises.push(promise);
+
+
+					img.onload = function () {
+						var imgSize = domStyle.backgroundSize.split(' '),
+								shownWidth = toPixel(imgSize[0], data.width),
+								shownHeight = toPixel(imgSize[1], data.height);
+						ctx.drawImage(img,
+							offset.x + data.x + toPixel(domStyle.backgroundPositionX, data.width - shownWidth),
+							offset.y + data.y + toPixel(domStyle.backgroundPositionY, data.height - shownHeight),
+							shownWidth,
+							shownHeight
+						);
+						promise.resolve();
+					};
+					img.src =	bgImage.substr(4, bgImage.length -5);
+				}
+			});
+			$.when.apply($, promises).then(result.resolve, result.reject, result.notify);
+			return result;
+		},
+		stage = $('[data-mapjs-role=stage]'),
+		svg = stage.toSVG(),
 		svgBlob = toSvgBlob(svg),
 		pngCreated = jQuery.Deferred(),
 		createPng = function () {
 			domURL.revokeObjectURL(svgBlob);
 			canvas = toCanvas(intermediateImg);
-			png = canvas.toDataURL('image/png');
-			pngCreated.resolve(png);
+			paintNodeImages(stage, canvas).done(function () {
+				console.log('done');
+				png = canvas.toDataURL('image/png');
+				pngCreated.resolve(png);
+			});
 		},
 		intermediateImg = new Image(),
 		canvas, png;
