@@ -45,18 +45,6 @@ $.fn.toSVG = function () {
 		clone.attr({x: offset.x + data.x, y:  offset.y + data.y, width: data.width, height: data.height, rx: radius, ry: radius}).
 		css({fill: domStyle.backgroundColor, stroke: domStyle.borderColor, 'stroke-width': domStyle.borderWidth});
 	});
-/*
-	domContainer = jQuery(document.createElementNS('http://www.w3.org/1999/xhtml', 'div')).attr('id','domcontainer');
-	MAPJS.createSVG('foreignObject').attr({'width': '100%','height': '100%'}).appendTo(result).append(domContainer);
-	source.children().not('svg').each(function () {
-		var objectToClone = $(this),
-		clone = objectToClone.clone().attr({class: '', id:''}).appendTo(domContainer).copyStyle(this);
-	objectToClone.children().each(function () {
-		var role = this.getAttribute('data-mapjs-role');
-		clone.find('[data-mapjs-role=' + role + ']').copyStyle(this);
-	});
-	clone.css({'left': (objectToClone.data('x') + offset.x), 'top': objectToClone.data('y') + offset.y});
-	});*/
 	return result[0];
 };
 $('[role=show]').click(function() {
@@ -72,8 +60,19 @@ $('[role=convert]').click(function () {
 			return new Blob([svgString], {type: 'image/svg+xml;charset=utf-8'});
 		},
 		toCanvas = function (img) {
-			var canvas = $('<canvas>').attr({width: img.width, height: img.height})[0];
-			canvas.getContext('2d').drawImage(img, 0, 0);
+
+			var
+				scaleX = 500 / img.width,
+				scaleY = 500 / img.height,
+				scale = Math.min(1, scaleX, scaleY),
+				canvasWidth = Math.min(500, img.width, img.width*scale),
+				canvasHeight =  Math.min(500, img.height, img.height*scale),
+				canvas = $('<canvas>').attr({width: canvasWidth , height: canvasHeight})[0],
+				ctx = canvas.getContext('2d');
+			if (scale < 1) {
+				ctx.scale(scale, scale);
+			}
+			ctx.drawImage(img, 0, 0);
 			return canvas;
 		},
 		toPixel = function (cssString, relativeTo) {
@@ -82,6 +81,56 @@ $('[role=convert]').click(function () {
 				return relativeTo * value / 100;
 			}
 			return value;
+		},
+	  wordwrap = function (ctx, text, font, fontColor, maxWidth, lineHeight, x, y) {
+    var lines =  [], width = 0, i, j, result;
+
+    // Font and size is required for ctx.measureText()
+    ctx.font   = font;
+
+    // Start calculation
+    while ( text.length ) {
+    	for( i=text.length; ctx.measureText(text.substr(0,i)).width > maxWidth; ) { i--;}
+				result = text.substr(0,i);
+        if ( i !== text.length ){
+					for( j=0; result.indexOf(' ',j) !== -1;) {j=result.indexOf(' ',j)+1; }
+					if (j) {
+						result = result.substr(0, j);
+					}
+        }
+        if (result.indexOf('\n')>=0) {
+            result = text.substr(0,result.indexOf('\n') + 1);
+        }
+
+    	lines.push( result );
+    	width = Math.max( width, ctx.measureText(lines[ lines.length-1 ]).width );
+    	text  = text.substr( lines[ lines.length-1 ].length, text.length );
+    }
+
+    // Render
+    ctx.fillStyle = fontColor;
+    for ( i=0, j=lines.length; i<j; ++i ) {
+    	ctx.fillText( lines[i], x, y + lineHeight * i );
+    }
+	},
+		paintText = function (stage, ctx) {
+				var offset = {
+						x: stage.data('offsetX'),
+						y: stage.data('offsetY')
+				};
+				stage.find('.mapjs-node').each(function () {
+					var node = $(this),
+						span = node.find('span'),
+						data = node.data(),
+					  domStyle = window.getComputedStyle(this),
+					  domStyleSpan = window.getComputedStyle(span[0]),
+						textLeft = toPixel(domStyle.paddingLeft, data.width) + toPixel(domStyleSpan.marginLeft, data.width),
+						textTop = (node.outerHeight(true) - span.innerHeight())/2,
+						lineHeight = toPixel(domStyleSpan.lineHeight, 10);
+					wordwrap(ctx, span.text(), domStyleSpan.font, domStyleSpan.color, span.outerWidth(true) + 3,lineHeight,
+						 offset.x +	data.x + textLeft,
+						 offset.y + data.y + textTop + 3 + lineHeight - toPixel(domStyleSpan.fontSize, 10)  );
+				});
 		},
 		paintNodeImages = function (stage, canvas) {
 			var result = jQuery.Deferred(),
@@ -102,8 +151,6 @@ $('[role=convert]').click(function () {
 					img = new Image();
 					promise = jQuery.Deferred();
 					promises.push(promise);
-
-
 					img.onload = function () {
 						var imgSize = domStyle.backgroundSize.split(' '),
 								shownWidth = toPixel(imgSize[0], data.width),
@@ -119,7 +166,7 @@ $('[role=convert]').click(function () {
 					img.src =	bgImage.substr(4, bgImage.length -5);
 				}
 			});
-			$.when.apply($, promises).then(result.resolve, result.reject, result.notify);
+			$.when.apply($, promises).then(function () { paintText(stage, ctx); result.resolve(); }, result.reject, result.notify);
 			return result;
 		},
 		stage = $('[data-mapjs-role=stage]'),
@@ -139,10 +186,11 @@ $('[role=convert]').click(function () {
 		canvas, png;
 	intermediateImg.onload = createPng;
 	intermediateImg.src = domURL.createObjectURL(svgBlob);
+	$('[tab=svg]').empty().append(svg);
+	$('[tab=intermediate-img]').empty().append(intermediateImg);
+	$('[tab=canvas]').empty().append(canvas);
 	pngCreated.done(function () {
-		$('[tab=svg]').empty().append(svg);
-		$('[tab=intermediate-img]').empty().append(intermediateImg);
-		$('[tab=canvas]').empty().append(canvas);
+		console.log('done', png.length);
 		$('[tab=png]').empty().html('<img src="'+png+'"/>');
 	});
 });
