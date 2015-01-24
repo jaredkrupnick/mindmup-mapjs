@@ -67,7 +67,8 @@ $('[role=convert]').click(function () {
 	var	domURL = window.URL || window.webkitURL || window,
 		toSvgBlob = function (svgElement) {
 			var	svgString = new XMLSerializer().serializeToString(svgElement);
-			return new Blob([svgString], {type: 'image/svg+xml;charset=utf-8'});
+			//return new Blob([svgString], {type: 'image/svg+xml;charset=utf-8'});
+			return 'data:image/svg+xml,' + svgString;
 		},
 		toCanvas = function (img) {
 
@@ -142,25 +143,30 @@ $('[role=convert]').click(function () {
 						data = node.data(),
 					  domStyle = window.getComputedStyle(this),
 						bgImage = domStyle.backgroundImage,
-						promise,
-						img;
-				if (/url\(/.test(bgImage)) { //todo:check for data url, not just url
-					img = new Image();
-					promise = jQuery.Deferred();
-					promises.push(promise);
-					img.onload = function () {
-						var imgSize = domStyle.backgroundSize.split(' '),
-								shownWidth = toPixel(imgSize[0], data.width),
-								shownHeight = toPixel(imgSize[1], data.height);
-						ctx.drawImage(img,
-							offset.x + data.x + toPixel(domStyle.backgroundPositionX, data.width - shownWidth),
-							offset.y + data.y + toPixel(domStyle.backgroundPositionY, data.height - shownHeight),
-							shownWidth,
-							shownHeight
-						);
-						promise.resolve();
-					};
-					img.src =	bgImage.substr(4, bgImage.length -5);
+						src,
+						addImage = function (srcUrl) {
+							var img = new Image(),
+								promise = jQuery.Deferred();
+							promises.push(promise);
+							img.onload = function () {
+								var imgSize = domStyle.backgroundSize.split(' '),
+										shownWidth = toPixel(imgSize[0], data.width),
+										shownHeight = toPixel(imgSize[1], data.height);
+								ctx.drawImage(img,
+									offset.x + data.x + toPixel((domStyle.backgroundPositionX || domStyle.backgroundPosition.split(' ')[0]), data.width - shownWidth),
+									offset.y + data.y + toPixel((domStyle.backgroundPositionY || domStyle.backgroundPosition.split(' ')[1]), data.height - shownHeight),
+									shownWidth,
+									shownHeight
+								);
+								promise.resolve();
+							};
+							img.src = srcUrl;
+						};
+				if(bgImage) {
+					src = bgImage.match(/url\(["]?([^"\)]*)["]?\)/);
+					if (src && src.length>1) {
+						addImage(src[1]);
+					}
 				}
 			});
 			$.when.apply($, promises).then(function () { paintText(stage, ctx); result.resolve(); }, result.reject, result.notify);
@@ -171,8 +177,9 @@ $('[role=convert]').click(function () {
 		svgBlob = toSvgBlob(svg),
 		pngCreated = jQuery.Deferred(),
 		createPng = function () {
-			domURL.revokeObjectURL(svgBlob);
+//			domURL.revokeObjectURL(svgBlob);
 			canvas = toCanvas(intermediateImg);
+			$('[tab=canvas]').empty().append(canvas);
 			paintNodeImages(stage, canvas).done(function () {
 				png = canvas.toDataURL('image/png');
 				pngCreated.resolve(png);
@@ -181,10 +188,9 @@ $('[role=convert]').click(function () {
 		intermediateImg = new Image(),
 		canvas, png;
 	intermediateImg.onload = createPng;
-	intermediateImg.src = domURL.createObjectURL(svgBlob);
+	intermediateImg.src = svgBlob; //domURL.createObjectURL(svgBlob);
 	$('[tab=svg]').empty().append(svg);
 	$('[tab=intermediate-img]').empty().append(intermediateImg);
-	$('[tab=canvas]').empty().append(canvas);
 	pngCreated.done(function () {
 		console.log('png created', png.length);
 		$('[tab=png]').empty().html('<img src="'+png+'"/>');
